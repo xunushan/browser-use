@@ -355,9 +355,176 @@
   }
 
   /**
-   * Wait for condition
+   * Perform keyboard event
    */
-  async function waitForCondition(condition, timeout = 5000) {
+  function performKeypress(ref, keys) {
+    const element = getElementByRef(ref);
+    if (!element) {
+      return { success: false, error: 'Element not found' };
+    }
+
+    if (!isVisible(element)) {
+      return { success: false, error: 'Element not visible' };
+    }
+
+    // Focus element
+    element.focus();
+
+    // Map key names to key codes
+    const keyMap = {
+      'Enter': { key: 'Enter', code: 'Enter', keyCode: 13 },
+      'Tab': { key: 'Tab', code: 'Tab', keyCode: 9 },
+      'Escape': { key: 'Escape', code: 'Escape', keyCode: 27 },
+      'ArrowUp': { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+      'ArrowDown': { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+      'ArrowLeft': { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+      'ArrowRight': { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+      'Backspace': { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+      'Delete': { key: 'Delete', code: 'Delete', keyCode: 46 },
+      'Space': { key: ' ', code: 'Space', keyCode: 32 },
+    };
+
+    const keyInfo = keyMap[keys] || { key: keys, code: keys, keyCode: keys.charCodeAt(0) };
+
+    // Dispatch keydown event
+    const keydownEvent = new KeyboardEvent('keydown', {
+      key: keyInfo.key,
+      code: keyInfo.code,
+      keyCode: keyInfo.keyCode,
+      bubbles: true,
+      cancelable: true,
+    });
+    element.dispatchEvent(keydownEvent);
+
+    // Dispatch keypress event
+    const keypressEvent = new KeyboardEvent('keypress', {
+      key: keyInfo.key,
+      code: keyInfo.code,
+      keyCode: keyInfo.keyCode,
+      bubbles: true,
+      cancelable: true,
+    });
+    element.dispatchEvent(keypressEvent);
+
+    // Dispatch keyup event
+    const keyupEvent = new KeyboardEvent('keyup', {
+      key: keyInfo.key,
+      code: keyInfo.code,
+      keyCode: keyInfo.keyCode,
+      bubbles: true,
+      cancelable: true,
+    });
+    element.dispatchEvent(keyupEvent);
+
+    return { success: true, keypressed: keys };
+  }
+
+  /**
+   * Wait for DOM element
+   */
+  async function waitForElement(selector, timeout = 5000) {
+    return waitForCondition(() => {
+      const element = document.querySelector(selector);
+      return element !== null && isVisible(element);
+    }, timeout);
+  }
+
+  /**
+   * Wait for URL change
+   */
+  async function waitForUrlChange(currentUrl, timeout = 10000) {
+    return waitForCondition(() => {
+      return window.location.href !== currentUrl;
+    }, timeout);
+  }
+
+  /**
+   * Wait for DOM mutation
+   */
+  async function waitForMutation(selector, timeout = 5000) {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      let resolved = false;
+
+      const observer = new MutationObserver((mutations) => {
+        if (resolved) return;
+
+        for (const mutation of mutations) {
+          // Check if the mutation affects the target element
+          if (selector) {
+            const target = document.querySelector(selector);
+            if (target) {
+              resolved = true;
+              observer.disconnect();
+              resolve({ success: true, mutation: 'detected' });
+              return;
+            }
+          } else {
+            // Any mutation
+            resolved = true;
+            observer.disconnect();
+            resolve({ success: true, mutation: 'detected' });
+            return;
+          }
+        }
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+      });
+
+      // Timeout handler
+      setTimeout(() => {
+        if (!resolved) {
+          observer.disconnect();
+          resolve({ success: false, error: 'Timeout waiting for mutation' });
+        }
+      }, timeout);
+    });
+  }
+
+  /**
+   * Get current page state
+   */
+  function getPageState() {
+    return {
+      url: window.location.href,
+      title: document.title,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      },
+      readyState: document.readyState,
+    };
+  }
+
+  /**
+   * Validate element before operation
+   */
+  function validateElement(ref) {
+    const element = getElementByRef(ref);
+    if (!element) {
+      return { valid: false, error: 'Element not found' };
+    }
+
+    if (!element.isConnected) {
+      return { valid: false, error: 'Element no longer in DOM' };
+    }
+
+    if (!isVisible(element)) {
+      return { valid: false, error: 'Element not visible' };
+    }
+
+    if (element.disabled) {
+      return { valid: false, error: 'Element is disabled' };
+    }
+
+    return { valid: true, element };
+  }
     const startTime = Date.now();
 
     return new Promise((resolve) => {
@@ -410,16 +577,34 @@
         sendResponse(scrollResult);
         break;
 
+      case 'keypress':
+        const keyResult = performKeypress(params?.ref, params?.keys);
+        sendResponse(keyResult);
+        break;
+
       case 'wait':
         // Wait for element or condition
         if (params?.selector) {
-          waitForCondition(
-            () => document.querySelector(params.selector) !== null,
-            params?.timeout || 5000
-          ).then(result => sendResponse(result));
+          waitForElement(params.selector, params?.timeout || 5000)
+            .then(result => sendResponse(result));
+        } else if (params?.url) {
+          waitForUrlChange(params.url, params?.timeout || 10000)
+            .then(result => sendResponse(result));
+        } else if (params?.mutation) {
+          waitForMutation(params?.selector, params?.timeout || 5000)
+            .then(result => sendResponse(result));
         } else {
           sendResponse({ error: 'No wait condition specified' });
         }
+        break;
+
+      case 'pageState':
+        sendResponse(getPageState());
+        break;
+
+      case 'validate':
+        const validationResult = validateElement(params?.ref);
+        sendResponse(validationResult);
         break;
 
       default:

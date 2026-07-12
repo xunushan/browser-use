@@ -115,8 +115,14 @@ async function handleDaemonCommand(message) {
       case "page.scroll":
         result = await pageScroll(params);
         break;
-      case "page.screenshot":
-        result = await pageScreenshot(params);
+      case "page.keypress":
+        result = await pageKeypress(params);
+        break;
+      case "page.wait":
+        result = await pageWait(params);
+        break;
+      case "page.validate":
+        result = await pageValidate(params);
         break;
       case "page.inject":
         result = await injectContentScript(params);
@@ -393,6 +399,45 @@ async function pageScreenshot(params) {
     screenshot: dataUrl,
     scope: scope || "viewport",
   };
+}
+
+async function pageKeypress(params) {
+  const { tabId, ref, keys } = params;
+
+  await injectContentScript({ tabId });
+
+  const response = await chrome.tabs.sendMessage(tabId, {
+    action: "keypress",
+    params: { ref, keys },
+  });
+
+  return response;
+}
+
+async function pageWait(params) {
+  const { tabId } = params;
+
+  await injectContentScript({ tabId });
+
+  const response = await chrome.tabs.sendMessage(tabId, {
+    action: "wait",
+    params: params,
+  });
+
+  return response;
+}
+
+async function pageValidate(params) {
+  const { tabId, ref } = params;
+
+  await injectContentScript({ tabId });
+
+  const response = await chrome.tabs.sendMessage(tabId, {
+    action: "validate",
+    params: { ref },
+  });
+
+  return response;
 }
 
 // Listen for tab updates to track navigation
