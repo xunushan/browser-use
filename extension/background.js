@@ -257,7 +257,7 @@ async function injectContentScript(params) {
     // Inject content script
     await chrome.scripting.executeScript({
       target: { tabId: tabId, allFrames: false },
-      files: ["content_scripts/content.js"],
+      files: ["content.js"],
       world: "ISOLATED",
     });
 
