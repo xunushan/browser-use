@@ -104,7 +104,70 @@ class TestDaemonLifecycle:
         assert response["error"]["code"] == -32601  # METHOD_NOT_FOUND
 
     @pytest.mark.asyncio
-    async def test_socket_permissions(self, daemon):
+    async def test_session_register(self, daemon):
+        """Test session.register stores extension session."""
+        response = await self._send_request(
+            daemon.socket_path,
+            "session.register",
+            {"extensionId": "test-ext-123", "protocolVersion": "1.0"},
+        )
+
+        assert "result" in response
+        assert response["result"]["status"] == "registered"
+        assert response["result"]["sessionId"] == "test-ext-123"
+
+    @pytest.mark.asyncio
+    async def test_session_unregister(self, daemon):
+        """Test session.unregister removes extension session."""
+        # First register
+        await self._send_request(
+            daemon.socket_path,
+            "session.register",
+            {"extensionId": "test-ext-456"},
+        )
+
+        # Then unregister
+        response = await self._send_request(
+            daemon.socket_path,
+            "session.unregister",
+            {"extensionId": "test-ext-456"},
+        )
+
+        assert "result" in response
+        assert response["result"]["status"] == "unregistered"
+
+    @pytest.mark.asyncio
+    async def test_tabs_list_with_no_extension(self, daemon):
+        """Test tabs.list returns error when no extension connected."""
+        response = await self._send_request(
+            daemon.socket_path,
+            "tabs.list",
+            {},
+        )
+
+        assert "result" in response
+        assert "error" in response["result"]
+        assert "No extension connected" in response["result"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_tabs_list_with_extension(self, daemon):
+        """Test tabs.list forwards to extension."""
+        # Register extension first
+        await self._send_request(
+            daemon.socket_path,
+            "session.register",
+            {"extensionId": "test-ext-789"},
+        )
+
+        response = await self._send_request(
+            daemon.socket_path,
+            "tabs.list",
+            {"domain": "example.com"},
+        )
+
+        assert "result" in response
+        assert response["result"]["forwarded"] is True
+        assert response["result"]["method"] == "tabs.list"
         """Test that socket has correct permissions."""
         import stat
 
