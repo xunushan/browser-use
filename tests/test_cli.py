@@ -23,6 +23,23 @@ class TestCLI:
     def test_ensure_without_daemon(self):
         """Test ensure without daemon returns error."""
         # This test assumes no daemon is running
+        # First stop any running daemon
+        subprocess.run(
+            [sys.executable, "-m", "chrome_agent.cli", "stop"],
+            capture_output=True,
+            text=True,
+        )
+
+        # Wait a moment for daemon to stop
+        import time
+        time.sleep(2)
+
+        # Remove socket file to ensure daemon is not running
+        import os
+        socket_path = os.path.expanduser("~/.chrome-agent/run/daemon.sock")
+        if os.path.exists(socket_path):
+            os.remove(socket_path)
+
         result = subprocess.run(
             [sys.executable, "-m", "chrome_agent.cli", "ensure"],
             capture_output=True,
