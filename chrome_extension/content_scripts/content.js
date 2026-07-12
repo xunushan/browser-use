@@ -283,8 +283,102 @@
   }
 
   /**
-   * Perform click on element
+   * Capture screenshot of element or viewport
    */
+  async function captureScreenshot(scope = 'viewport', ref = null) {
+    try {
+      let targetElement = null;
+      let rect = null;
+
+      if (scope === 'element' && ref) {
+        targetElement = getElementByRef(ref);
+        if (!targetElement) {
+          return { success: false, error: 'Element not found for screenshot' };
+        }
+        rect = targetElement.getBoundingClientRect();
+      } else if (scope === 'region' && params?.rect) {
+        rect = params.rect;
+      } else {
+        // Viewport screenshot
+        rect = {
+          x: 0,
+          y: 0,
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
+      }
+
+      // Add padding for context
+      const padding = 24;
+      const captureRect = {
+        x: Math.max(0, rect.x - padding),
+        y: Math.max(0, rect.y - padding),
+        width: Math.min(window.innerWidth, rect.width + padding * 2),
+        height: Math.min(window.innerHeight, rect.height + padding * 2),
+      };
+
+      // Use html2canvas-like approach or native screenshot
+      // For now, return the rect info for the background script to capture
+      return {
+        success: true,
+        scope: scope,
+        rect: captureRect,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        pageZoom: window.visualViewport?.scale || 1,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        documentId: DOCUMENT_ID,
+      };
+    } catch (error) {
+      return { success: false, error: `Screenshot failed: ${error.message}` };
+    }
+  }
+
+  /**
+   * Check if page is sensitive (login, payment, etc.)
+   */
+  function checkPageSensitivity() {
+    const sensitivePatterns = [
+      /login/i,
+      /signin/i,
+      /auth/i,
+      /password/i,
+      /payment/i,
+      /checkout/i,
+      /billing/i,
+      /credit/i,
+      /bank/i,
+    ];
+
+    const url = window.location.href.toLowerCase();
+    const title = document.title.toLowerCase();
+
+    for (const pattern of sensitivePatterns) {
+      if (pattern.test(url) || pattern.test(title)) {
+        return {
+          sensitive: true,
+          level: 'sensitive',
+          reason: `Page matches sensitive pattern: ${pattern.source}`,
+        };
+      }
+    }
+
+    return { sensitive: false, level: 'normal' };
+  }
+
+  /**
+   * Redact sensitive areas in screenshot data
+   */
+  function redactSensitiveAreas(dataUrl) {
+    // In a real implementation, this would analyze the screenshot
+    // and redact sensitive areas like password fields, credit card numbers, etc.
+    // For now, return the original data URL
+    return {
+      redacted: false,
+      dataUrl: dataUrl,
+      reason: 'Redaction not implemented in V1',
+    };
+  }
   function performClick(ref) {
     const element = getElementByRef(ref);
     if (!element) {
@@ -577,7 +671,14 @@
         sendResponse(scrollResult);
         break;
 
-      case 'keypress':
+      case 'screenshot':
+        captureScreenshot(params?.scope || 'viewport', params?.ref)
+          .then(result => sendResponse(result));
+        break;
+
+      case 'checkSensitivity':
+        sendResponse(checkPageSensitivity());
+        break;
         const keyResult = performKeypress(params?.ref, params?.keys);
         sendResponse(keyResult);
         break;
