@@ -619,6 +619,11 @@
 
     return { valid: true, element };
   }
+
+  /**
+   * Wait for a condition to be met
+   */
+  function waitForCondition(condition, timeout = 5000) {
     const startTime = Date.now();
 
     return new Promise((resolve) => {
@@ -679,6 +684,7 @@
       case 'checkSensitivity':
         sendResponse(checkPageSensitivity());
         break;
+      case 'keypress':
         const keyResult = performKeypress(params?.ref, params?.keys);
         sendResponse(keyResult);
         break;
