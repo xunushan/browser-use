@@ -61,3 +61,15 @@ class TestCLI:
         assert "stop" in result.stdout
         assert "status" in result.stdout
         assert "version" in result.stdout
+
+    def test_tabs_help(self):
+        """Test tabs command help."""
+        result = subprocess.run(
+            [sys.executable, "-m", "chrome_agent.cli", "tabs", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "list" in result.stdout
+        assert "open" in result.stdout
+        assert "claim" in result.stdout

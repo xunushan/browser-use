@@ -109,6 +109,74 @@ def status() -> None:
         click.echo("Daemon not running")
 
 
+@cli.group()
+def tabs():
+    """Tab management commands."""
+    pass
+
+
+@tabs.command("list")
+@click.option("--domain", help="Filter by domain")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def tabs_list(domain: str, json_output: bool) -> None:
+    """List browser tabs."""
+    try:
+        params = {}
+        if domain:
+            params["domain"] = domain
+
+        result = _send_command("tabs.list", params)
+
+        if json_output:
+            click.echo(json.dumps(result))
+        else:
+            if "error" in result:
+                click.echo(f"Error: {result['error']}", err=True)
+                sys.exit(1)
+            else:
+                tabs = result.get("tabs", [])
+                for tab in tabs:
+                    active = "*" if tab.get("active") else " "
+                    click.echo(f"{active} [{tab['id']}] {tab.get('title', 'Untitled')} - {tab.get('url', '')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tabs.command("open")
+@click.argument("url")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def tabs_open(url: str, json_output: bool) -> None:
+    """Open a new tab."""
+    try:
+        result = _send_command("tabs.open", {"url": url})
+
+        if json_output:
+            click.echo(json.dumps(result))
+        else:
+            click.echo(f"Opened tab: {result.get('tabId')} - {result.get('url')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tabs.command("claim")
+@click.argument("tab_id", type=int)
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def tabs_claim(tab_id: int, json_output: bool) -> None:
+    """Claim a tab for control."""
+    try:
+        result = _send_command("tabs.claim", {"tabId": tab_id})
+
+        if json_output:
+            click.echo(json.dumps(result))
+        else:
+            click.echo(f"Claimed tab: {result.get('tabId')} - {result.get('title', '')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 @cli.command()
 def version() -> None:
     """Show version information."""
