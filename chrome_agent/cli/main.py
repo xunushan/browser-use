@@ -24,50 +24,115 @@ def cli():
 
 
 @cli.command()
-@click.option("--launch-if-missing", is_flag=True, help="Launch daemon if not running")
+@click.option("--launch-if-missing", is_flag=True, help="Launch Chrome if not running")
+@click.option("--wait-for-extension", is_flag=True, help="Wait for extension to connect")
+@click.option("--timeout", default=30, type=int, help="Timeout in seconds")
 @click.option("--json", "json_output", is_flag=True, help="Output JSON")
-def ensure(launch_if_missing: bool, json_output: bool) -> None:
-    """Ensure daemon is running."""
+def ensure(launch_if_missing: bool, wait_for_extension: bool, timeout: int, json_output: bool) -> None:
+    """Ensure daemon and Chrome are running."""
     try:
         # Try to connect to existing daemon
         result = _ping_daemon()
         if result:
-            if json_output:
-                click.echo(json.dumps({"status": "ready", "daemon": True}))
-            else:
-                click.echo("Daemon is running")
-            return
+            # Check if extension is connected
+            extensions = result.get("extensions", [])
+            if extensions or not wait_for_extension:
+                if json_output:
+                    click.echo(json.dumps({
+                        "status": "ready",
+                        "daemon": True,
+                        "chrome": True,
+                        "extension": len(extensions) > 0,
+                        "extensions": extensions,
+                    }))
+                else:
+                    click.echo("Daemon is running")
+                    if extensions:
+                        click.echo(f"Extension connected: {extensions[0]}")
+                return
     except Exception:
         pass
 
     if launch_if_missing:
         # Start daemon
         _start_daemon()
+
         # Wait for daemon to be ready
-        for _ in range(10):
+        start_time = time.time()
+        while time.time() - start_time < timeout:
             try:
                 result = _ping_daemon()
                 if result:
-                    if json_output:
-                        click.echo(json.dumps({"status": "ready", "daemon": True}))
-                    else:
-                        click.echo("Daemon started and ready")
-                    return
+                    if not wait_for_extension:
+                        if json_output:
+                            click.echo(json.dumps({
+                                "status": "ready",
+                                "daemon": True,
+                                "chrome": _is_chrome_running(),
+                            }))
+                        else:
+                            click.echo("Daemon started and ready")
+                        return
+
+                    # Wait for extension
+                    extensions = result.get("extensions", [])
+                    if extensions:
+                        if json_output:
+                            click.echo(json.dumps({
+                                "status": "ready",
+                                "daemon": True,
+                                "chrome": True,
+                                "extension": True,
+                                "extensions": extensions,
+                            }))
+                        else:
+                            click.echo("Daemon and extension ready")
+                        return
             except Exception:
                 pass
-            time.sleep(0.5)
+            time.sleep(1)
 
         if json_output:
-            click.echo(json.dumps({"status": "error", "message": "Failed to start daemon"}))
+            click.echo(json.dumps({
+                "status": "error",
+                "message": "Timeout waiting for daemon/extension",
+                "daemon": _ping_daemon() is not None,
+                "chrome": _is_chrome_running(),
+            }))
         else:
-            click.echo("Failed to start daemon", err=True)
+            click.echo("Timeout waiting for daemon/extension", err=True)
         sys.exit(1)
     else:
         if json_output:
-            click.echo(json.dumps({"status": "error", "message": "Daemon not running"}))
+            click.echo(json.dumps({
+                "status": "error",
+                "message": "Daemon not running",
+            }))
         else:
             click.echo("Daemon not running", err=True)
         sys.exit(1)
+
+
+def _is_chrome_running() -> bool:
+    """Check if Chrome is running."""
+    try:
+        if sys.platform == "darwin":
+            result = subprocess.run(
+                ["pgrep", "-x", "Google Chrome"],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        elif sys.platform == "linux":
+            result = subprocess.run(
+                ["pgrep", "google-chrome"],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        return False
+    except Exception:
+        return False
 
 
 @cli.command()
