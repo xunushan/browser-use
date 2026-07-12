@@ -59,7 +59,7 @@ class TestGlmVisionProvider:
             if "GLM_API_KEY" in os.environ:
                 del os.environ["GLM_API_KEY"]
 
-            with pytest.raises(ValueError, match="GLM API key not found"):
+            with pytest.raises(ValueError, match="glm API key not found"):
                 GlmVisionProvider()
         finally:
             # Restore key

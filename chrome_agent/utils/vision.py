@@ -7,12 +7,13 @@ import base64
 import hashlib
 import json
 import logging
-import os
 import tempfile
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
+
+from .config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,12 @@ class GlmVisionProvider(VisionProvider):
     """GLM-4.6V-Flash vision provider."""
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.environ.get("GLM_API_KEY")
-        if not self.api_key:
-            raise ValueError("GLM API key not found. Set GLM_API_KEY environment variable.")
+        if api_key:
+            self.api_key = api_key
+        else:
+            # Use ConfigManager to get API key securely
+            config = ConfigManager()
+            self.api_key = config.get_api_key("glm")
 
     def analyze(self, request: VisionRequest) -> VisionResult:
         """Analyze an image using GLM-4.6V-Flash."""
