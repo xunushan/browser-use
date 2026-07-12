@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
 NATIVE_HOST_NAME="com.browseruse.chrome_agent"
 
 # Colors
@@ -84,6 +84,7 @@ main() {
 
     # Create launcher script
     local launcher_path="${PROJECT_ROOT}/chrome_agent/native_host/launcher.sh"
+    mkdir -p "$(dirname "$launcher_path")"
     cat > "$launcher_path" <<EOF
 #!/usr/bin/env bash
 # Auto-generated launcher for Chrome Agent Native Host
