@@ -131,6 +131,9 @@ def main():
     """Main entry point for Native Messaging Host."""
     logger.info("Native Messaging Host started")
 
+    # Persistent connection to daemon
+    daemon_sock = None
+
     try:
         while True:
             # Read message from Chrome
@@ -141,17 +144,68 @@ def main():
 
             logger.debug(f"Received from Chrome: {message}")
 
-            # Forward to daemon
-            response = forward_to_daemon(message)
+            # Ensure connection to daemon
+            if daemon_sock is None:
+                try:
+                    daemon_sock = connect_to_daemon()
+                except Exception as e:
+                    logger.error(f"Failed to connect to daemon: {e}")
+                    write_native_message({
+                        "jsonrpc": "2.0",
+                        "id": message.get("id"),
+                        "error": {
+                            "code": -32000,
+                            "message": f"Daemon connection error: {e}",
+                        },
+                    })
+                    continue
 
-            # Write response to Chrome
-            write_native_message(response)
+            try:
+                # Send message to daemon
+                data = json.dumps(message).encode("utf-8")
+                daemon_sock.sendall(struct.pack("<I", len(data)))
+                daemon_sock.sendall(data)
+
+                # Read response from daemon
+                response = read_daemon_response(daemon_sock)
+
+                # Write response to Chrome
+                if response:
+                    write_native_message(response)
+                else:
+                    logger.warning("No response from daemon")
+                    write_native_message({
+                        "jsonrpc": "2.0",
+                        "id": message.get("id"),
+                        "error": {
+                            "code": -32000,
+                            "message": "No response from daemon",
+                        },
+                    })
+
+            except Exception as e:
+                logger.error(f"Error communicating with daemon: {e}")
+                # Close and reset connection
+                if daemon_sock:
+                    daemon_sock.close()
+                    daemon_sock = None
+
+                write_native_message({
+                    "jsonrpc": "2.0",
+                    "id": message.get("id"),
+                    "error": {
+                        "code": -32000,
+                        "message": f"Daemon communication error: {e}",
+                    },
+                })
 
     except KeyboardInterrupt:
         logger.info("Native Messaging Host interrupted")
     except Exception as e:
         logger.error(f"Native Messaging Host error: {e}")
     finally:
+        if daemon_sock:
+            daemon_sock.close()
         logger.info("Native Messaging Host exiting")
 
 
