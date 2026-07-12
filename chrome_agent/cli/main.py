@@ -32,7 +32,7 @@ def ensure(launch_if_missing: bool, wait_for_extension: bool, timeout: int, json
     """Ensure daemon and Chrome are running."""
     try:
         # Try to connect to existing daemon
-        result = _ping_daemon()
+        result = _check_daemon_ready()
         if result:
             # Check if extension is connected
             extensions = result.get("extensions", [])
@@ -61,7 +61,7 @@ def ensure(launch_if_missing: bool, wait_for_extension: bool, timeout: int, json
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
-                result = _ping_daemon()
+                result = _check_daemon_ready()
                 if result:
                     if not wait_for_extension:
                         if json_output:
@@ -387,6 +387,11 @@ def version() -> None:
 def _ping_daemon() -> dict:
     """Ping the daemon and return response."""
     return _send_command("system.ping", {})
+
+
+def _check_daemon_ready() -> dict:
+    """Check daemon ready status and return response."""
+    return _send_command("system.ready", {})
 
 
 def _send_command(method: str, params: dict) -> dict:
