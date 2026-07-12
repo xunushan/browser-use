@@ -1,8 +1,9 @@
 /**
- * Chrome Agent Extension - Background Service Worker
+ * Chrome Agent Extension - Background Service Worker (Enhanced)
  *
  * Manages connection to Native Messaging Host and handles
  * communication with the Chrome Agent Daemon.
+ * Supports on-demand content script injection and dynamic registration.
  */
 
 // Connection state
@@ -10,10 +11,15 @@ let nativePort = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 let isConnected = false;
+let sessionId = null;
 
 // Reconnect configuration
 const RECONNECT_DELAYS = [0, 1000, 2000, 4000, 8000, 15000, 30000];
 const MAX_RECONNECT_ATTEMPTS = RECONNECT_DELAYS.length;
+
+// Content script injection state
+const injectedTabs = new Map();
+const registeredScripts = new Map();
 
 /**
  * Connect to the Native Messaging Host
@@ -37,7 +43,7 @@ function connectDaemon() {
     console.log("Connected to Chrome Agent Daemon");
 
     // Send registration message
-    nativePort.postMessage({
+    sendToDaemon({
       jsonrpc: "2.0",
       method: "session.register",
       params: {
@@ -55,12 +61,20 @@ function connectDaemon() {
 }
 
 /**
+ * Send message to daemon
+ */
+function sendToDaemon(message) {
+  if (nativePort) {
+    nativePort.postMessage(message);
+  }
+}
+
+/**
  * Handle messages from Native Host
  */
 function handleNativeMessage(message) {
   console.log("Received from daemon:", message);
 
-  // Handle different message types
   if (message.method) {
     handleDaemonCommand(message);
   } else if (message.result) {
@@ -104,6 +118,15 @@ async function handleDaemonCommand(message) {
       case "page.screenshot":
         result = await pageScreenshot(params);
         break;
+      case "page.inject":
+        result = await injectContentScript(params);
+        break;
+      case "page.register":
+        result = await registerContentScript(params);
+        break;
+      case "page.unregister":
+        result = await unregisterContentScript(params);
+        break;
       default:
         sendError(id, -32601, `Method not found: ${method}`);
         return;
@@ -121,7 +144,6 @@ async function handleDaemonCommand(message) {
  */
 function handleDaemonResponse(message) {
   console.log("Daemon response:", message);
-  // Responses are typically handled by the requester
 }
 
 /**
@@ -138,8 +160,6 @@ function handleDisconnect() {
   console.log("Disconnected from daemon");
   isConnected = false;
   nativePort = null;
-
-  // Schedule reconnect
   scheduleReconnect();
 }
 
@@ -218,18 +238,105 @@ async function claimTab(params) {
   return { tabId: tab.id, url: tab.url, title: tab.title };
 }
 
-// Page interaction functions
-async function pageSnapshot(params) {
+// Content Script injection functions
+async function injectContentScript(params) {
   const { tabId } = params;
 
-  // Inject content script if needed
-  await ensureContentScript(tabId);
+  try {
+    // Check if already injected
+    if (injectedTabs.has(tabId)) {
+      return { success: true, injected: true, cached: true };
+    }
+
+    // Inject content script
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId, allFrames: false },
+      files: ["content_scripts/content.js"],
+      world: "ISOLATED",
+    });
+
+    // Mark as injected
+    injectedTabs.set(tabId, {
+      injectedAt: Date.now(),
+      documentId: null, // Will be updated after first snapshot
+    });
+
+    return { success: true, injected: true };
+  } catch (error) {
+    console.error("Error injecting content script:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function registerContentScript(params) {
+  const { tabId, urlPattern } = params;
+  const scriptId = `agent-session-${tabId}-${Date.now()}`;
+
+  try {
+    await chrome.scripting.registerContentScripts([
+      {
+        id: scriptId,
+        matches: [urlPattern || "<all_urls>"],
+        js: ["content_scripts/content.js"],
+        runAt: "document_start",
+        world: "ISOLATED",
+        persistAcrossSessions: false,
+      },
+    ]);
+
+    registeredScripts.set(scriptId, {
+      tabId,
+      urlPattern,
+      registeredAt: Date.now(),
+    });
+
+    return { success: true, scriptId };
+  } catch (error) {
+    console.error("Error registering content script:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function unregisterContentScript(params) {
+  const { scriptId } = params;
+
+  try {
+    await chrome.scripting.unregisterContentScripts({
+      ids: [scriptId],
+    });
+
+    registeredScripts.delete(scriptId);
+
+    return { success: true };
+  } catch (error) {
+    console.error("Error unregistering content script:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Page interaction functions
+async function pageSnapshot(params) {
+  const { tabId, scope } = params;
+
+  // Ensure content script is injected
+  const injectResult = await injectContentScript({ tabId });
+  if (!injectResult.success) {
+    return injectResult;
+  }
 
   // Send message to content script
   const response = await chrome.tabs.sendMessage(tabId, {
     action: "snapshot",
-    params: params,
+    params: { scope: scope || "viewport" },
   });
+
+  // Update document ID tracking
+  if (response.documentId) {
+    const tabInfo = injectedTabs.get(tabId);
+    if (tabInfo) {
+      tabInfo.documentId = response.documentId;
+    }
+  }
 
   return response;
 }
@@ -237,11 +344,11 @@ async function pageSnapshot(params) {
 async function pageClick(params) {
   const { tabId, ref } = params;
 
-  await ensureContentScript(tabId);
+  await injectContentScript({ tabId });
 
   const response = await chrome.tabs.sendMessage(tabId, {
     action: "click",
-    params: params,
+    params: { ref },
   });
 
   return response;
@@ -250,11 +357,11 @@ async function pageClick(params) {
 async function pageFill(params) {
   const { tabId, ref, value } = params;
 
-  await ensureContentScript(tabId);
+  await injectContentScript({ tabId });
 
   const response = await chrome.tabs.sendMessage(tabId, {
     action: "fill",
-    params: params,
+    params: { ref, value },
   });
 
   return response;
@@ -263,7 +370,7 @@ async function pageFill(params) {
 async function pageScroll(params) {
   const { tabId } = params;
 
-  await ensureContentScript(tabId);
+  await injectContentScript({ tabId });
 
   const response = await chrome.tabs.sendMessage(tabId, {
     action: "scroll",
@@ -277,7 +384,8 @@ async function pageScreenshot(params) {
   const { tabId, scope } = params;
 
   // Capture screenshot using chrome.tabs.captureVisibleTab
-  const dataUrl = await chrome.tabs.captureVisibleTab(tabId.windowId, {
+  const tab = await chrome.tabs.get(tabId);
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "png",
   });
 
@@ -287,21 +395,22 @@ async function pageScreenshot(params) {
   };
 }
 
-/**
- * Ensure content script is injected in tab
- */
-async function ensureContentScript(tabId) {
-  try {
-    // Try to send a ping message
-    await chrome.tabs.sendMessage(tabId, { action: "ping" });
-  } catch (error) {
-    // Content script not injected, inject it
-    await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      files: ["content_scripts/content.js"],
-    });
+// Listen for tab updates to track navigation
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete') {
+    // Tab has finished loading, update injection status
+    if (injectedTabs.has(tabId)) {
+      injectedTabs.delete(tabId);
+    }
   }
-}
+});
+
+// Listen for tab removal
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (injectedTabs.has(tabId)) {
+    injectedTabs.delete(tabId);
+  }
+});
 
 // Initialize connection on startup
 chrome.runtime.onStartup.addListener(connectDaemon);
