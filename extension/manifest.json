@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Chrome Agent",
+  "version": "0.1.0",
+  "description": "Local browser automation agent",
+  "permissions": [
+    "scripting",
+    "storage",
+    "tabs",
+    "activeTab",
+    "nativeMessaging"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
