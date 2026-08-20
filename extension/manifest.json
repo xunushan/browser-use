@@ -8,7 +8,12 @@
     "storage",
     "tabs",
     "activeTab",
-    "nativeMessaging"
+    "nativeMessaging",
+    "alarms",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://*.xiaohongshu.com/*"
   ],
   "optional_host_permissions": [
     "http://*/*",
@@ -16,6 +21,10 @@
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Chrome Agent site access",
+    "default_popup": "popup.html"
   },
   "icons": {
     "16": "icons/icon16.png",

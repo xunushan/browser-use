@@ -2,15 +2,13 @@
 
 from pathlib import Path
 
-import pytest
-
 
 class TestDOMOperations:
     """Test DOM operation functionality."""
 
     def test_content_script_has_keypress_function(self):
         """Test that content script has keypress function."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "content_scripts" / "content.js"
+        script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
         assert "performKeypress" in content
@@ -20,7 +18,7 @@ class TestDOMOperations:
 
     def test_content_script_has_wait_functions(self):
         """Test that content script has wait functions."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "content_scripts" / "content.js"
+        script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
         assert "waitForElement" in content
@@ -30,7 +28,7 @@ class TestDOMOperations:
 
     def test_content_script_has_page_state_function(self):
         """Test that content script has page state function."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "content_scripts" / "content.js"
+        script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
         assert "getPageState" in content
@@ -38,7 +36,7 @@ class TestDOMOperations:
 
     def test_content_script_has_validate_function(self):
         """Test that content script has validate function."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "content_scripts" / "content.js"
+        script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
         assert "validateElement" in content
@@ -46,7 +44,7 @@ class TestDOMOperations:
 
     def test_background_script_has_keypress_handler(self):
         """Test that background script has keypress handler."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "background" / "background.js"
+        script = Path(__file__).parent.parent / "extension" / "background.js"
         content = script.read_text()
 
         assert "pageKeypress" in content
@@ -55,7 +53,7 @@ class TestDOMOperations:
 
     def test_background_script_has_wait_handler(self):
         """Test that background script has wait handler."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "background" / "background.js"
+        script = Path(__file__).parent.parent / "extension" / "background.js"
         content = script.read_text()
 
         assert "page.wait" in content
@@ -63,7 +61,7 @@ class TestDOMOperations:
 
     def test_keypress_event_types(self):
         """Test that keypress supports common keys."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "content_scripts" / "content.js"
+        script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
         # Check for common keys
@@ -78,7 +76,7 @@ class TestDOMOperations:
 
     def test_wait_conditions(self):
         """Test that wait supports different conditions."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "content_scripts" / "content.js"
+        script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
         assert "selector" in content
@@ -87,7 +85,7 @@ class TestDOMOperations:
 
     def test_validate_checks(self):
         """Test that validate checks all conditions."""
-        script = Path(__file__).parent.parent / "chrome_extension" / "content_scripts" / "content.js"
+        script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
         assert "Element not found" in content

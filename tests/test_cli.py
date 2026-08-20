@@ -2,9 +2,6 @@
 
 import subprocess
 import sys
-from pathlib import Path
-
-import pytest
 
 
 class TestCLI:
@@ -32,10 +29,12 @@ class TestCLI:
 
         # Wait a moment for daemon to stop
         import time
+
         time.sleep(2)
 
         # Remove socket file to ensure daemon is not running
         import os
+
         socket_path = os.path.expanduser("~/.chrome-agent/run/daemon.sock")
         if os.path.exists(socket_path):
             os.remove(socket_path)
@@ -73,3 +72,4 @@ class TestCLI:
         assert "list" in result.stdout
         assert "open" in result.stdout
         assert "claim" in result.stdout
+        assert "activate" in result.stdout

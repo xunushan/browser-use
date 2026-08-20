@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body { font: 13px system-ui; width: 260px; margin: 16px; color: #202124; }
+      button { width: 100%; padding: 8px; margin-top: 10px; }
+      #status { margin-top: 10px; overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <strong>Chrome Agent</strong>
+    <div id="site">正在读取当前网站…</div>
+    <button id="grant" disabled>授权当前网站</button>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

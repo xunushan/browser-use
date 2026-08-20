@@ -1,9 +1,0 @@
-{
-  "name": "com.browseruse.chrome_agent",
-  "description": "Chrome Agent Native Messaging Host",
-  "path": "/Users/isuntaiyang/projects/browser_use/chrome_agent/native_host/native_host.py",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://*"
-  ]
-}

@@ -26,6 +26,7 @@ def main() -> None:
     """Main entry point for the daemon."""
     setup_logging()
     from .daemon import run_daemon
+
     asyncio.run(run_daemon())
 
 

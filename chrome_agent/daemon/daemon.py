@@ -1,14 +1,13 @@
 """Chrome Agent Daemon implementation."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import signal
 import struct
-import sys
-from pathlib import Path
-from typing import Any, Optional
+import uuid
 
 from ..utils.jsonrpc import (
     JsonRpcError,
@@ -16,7 +15,7 @@ from ..utils.jsonrpc import (
     create_response,
     parse_message,
 )
-from ..utils.paths import get_log_dir, get_pid_path, get_socket_path
+from ..utils.paths import get_pid_path, get_socket_path
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +25,15 @@ class ChromeAgentDaemon:
 
     def __init__(self):
         self.socket_path = get_socket_path()
-        self.server: Optional[asyncio.Server] = None
+        self.server: asyncio.Server | None = None
         self.running = False
         self._shutdown_event = asyncio.Event()
-        # Extension session management
-        self._extension_sessions: dict[str, dict] = {}  # session_id -> session info
-        self._pending_requests: dict[str, asyncio.Future] = {}  # request_id -> future
-        self._request_counter = 0
+        # Extension session management: session_id -> {writer, client_id, info}
+        self._extension_sessions: dict[str, dict] = {}
+        # Pending requests from CLI: request_id -> asyncio.Future
+        self._pending_requests: dict[str, asyncio.Future] = {}
+        # Lock for thread-safe access
+        self._lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the daemon."""
@@ -78,22 +79,26 @@ class ChromeAgentDaemon:
 
         logger.info("Daemon stopped")
 
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         """Handle a client connection."""
         client_id = f"client-{id(writer)}"
         try:
             while self.running:
                 # Read message length (4 bytes, little-endian)
-                length_bytes = await reader.read(4)
-                if not length_bytes:
+                try:
+                    length_bytes = await reader.readexactly(4)
+                except asyncio.IncompleteReadError:
                     break
 
                 message_length = struct.unpack("<I", length_bytes)[0]
 
                 # Read message data
-                data = await reader.read(message_length)
-                if len(data) != message_length:
-                    logger.warning("Incomplete message received")
+                try:
+                    data = await reader.readexactly(message_length)
+                except asyncio.IncompleteReadError:
+                    logger.warning("Incomplete message received from %s", client_id)
                     break
 
                 # Process message
@@ -111,14 +116,22 @@ class ChromeAgentDaemon:
         except Exception as e:
             logger.error(f"Error handling client: {e}")
         finally:
-            # Clean up extension session if this was an extension
-            if client_id in self._extension_sessions:
-                del self._extension_sessions[client_id]
-                logger.info(f"Extension disconnected: {client_id}")
+            async with self._lock:
+                disconnected = [
+                    session_id
+                    for session_id, session in self._extension_sessions.items()
+                    if session.get("writer") is writer
+                ]
+                for session_id in disconnected:
+                    del self._extension_sessions[session_id]
+                    logger.info("Extension disconnected: %s", session_id)
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                await writer.wait_closed()
 
-    async def _process_message(self, data: bytes, client_id: str = None, writer=None) -> Optional[dict]:
+    async def _process_message(
+        self, data: bytes, client_id: str = None, writer=None
+    ) -> dict | None:
         """Process a JSON-RPC message."""
         try:
             message = parse_message(data)
@@ -128,10 +141,16 @@ class ChromeAgentDaemon:
 
             logger.debug(f"Received method: {method}, id: {request_id}")
 
+            # Check if this is a response to a forwarded request
+            if "result" in message or "error" in message:
+                # This is a response from the extension
+                await self._handle_extension_response(message)
+                return None
+
             # Route to handler
             handler = self._get_handler(method)
             if handler:
-                result = await handler(params, client_id)
+                result = await handler(params, client_id, writer)
                 return create_response(result, request_id)
             else:
                 return create_error_response(
@@ -150,27 +169,53 @@ class ChromeAgentDaemon:
                 None,
             )
 
+    async def _handle_extension_response(self, message: dict) -> None:
+        """Handle a response from the extension to a forwarded request."""
+        request_id = message.get("id")
+        if request_id in self._pending_requests:
+            future = self._pending_requests.pop(request_id)
+            if not future.done():
+                if "result" in message:
+                    future.set_result(message["result"])
+                elif "error" in message:
+                    future.set_exception(
+                        RuntimeError(message["error"].get("message", "Unknown error"))
+                    )
+                else:
+                    future.set_result(message)
+
     def _get_handler(self, method: str):
         """Get handler for a method."""
         handlers = {
             "system.ping": self._handle_ping,
             "system.version": self._handle_version,
             "system.ready": self._handle_ready,
+            "system.stop": self._handle_stop,
             "session.register": self._handle_session_register,
             "session.unregister": self._handle_session_unregister,
             "tabs.list": self._handle_tabs_list,
             "tabs.open": self._handle_tabs_open,
+            "tabs.navigate": self._handle_tabs_navigate,
             "tabs.claim": self._handle_tabs_claim,
+            "tabs.activate": self._handle_tabs_activate,
             "page.snapshot": self._handle_page_snapshot,
             "page.click": self._handle_page_click,
             "page.fill": self._handle_page_fill,
             "page.keypress": self._handle_page_keypress,
             "page.scroll": self._handle_page_scroll,
             "page.wait": self._handle_page_wait,
+            "page.validate": self._handle_page_validate,
+            "page.screenshot": self._handle_page_screenshot,
+            "page.extract": self._handle_page_extract,
+            "page.text": self._handle_page_text,
+            "page.images": self._handle_page_images,
+            "page.downloadImages": self._handle_page_download_images,
+            "page.media": self._handle_page_media,
+            "page.downloadMedia": self._handle_page_download_media,
         }
         return handlers.get(method)
 
-    async def _handle_ping(self, params: dict) -> dict:
+    async def _handle_ping(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle system.ping request."""
         return {
             "pong": True,
@@ -178,15 +223,16 @@ class ChromeAgentDaemon:
             "timestamp": asyncio.get_event_loop().time(),
         }
 
-    async def _handle_version(self, params: dict) -> dict:
+    async def _handle_version(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle system.version request."""
         from .. import __version__
+
         return {
             "version": __version__,
             "protocolVersion": "1.0",
         }
 
-    async def _handle_ready(self, params: dict) -> dict:
+    async def _handle_ready(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle system.ready request."""
         return {
             "ready": True,
@@ -195,89 +241,189 @@ class ChromeAgentDaemon:
         }
 
     # Session management
-    async def _handle_session_register(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_session_register(
+        self, params: dict, client_id: str = None, writer=None
+    ) -> dict:
         """Handle session.register from extension."""
         session_id = params.get("extensionId", f"session-{len(self._extension_sessions)}")
-        self._extension_sessions[session_id] = {
-            "extensionId": session_id,
-            "protocolVersion": params.get("protocolVersion"),
-            "browserVersion": params.get("browserVersion"),
-            "connectedAt": asyncio.get_event_loop().time(),
-            "client_id": client_id,
-        }
+        async with self._lock:
+            self._extension_sessions[session_id] = {
+                "extensionId": session_id,
+                "protocolVersion": params.get("protocolVersion"),
+                "browserVersion": params.get("browserVersion"),
+                "connectedAt": asyncio.get_event_loop().time(),
+                "client_id": client_id,
+                "writer": writer,
+            }
         logger.info(f"Extension registered: {session_id}")
         return {
             "sessionId": session_id,
             "status": "registered",
         }
 
-    async def _handle_session_unregister(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_session_unregister(
+        self, params: dict, client_id: str = None, writer=None
+    ) -> dict:
         """Handle session.unregister from extension."""
         session_id = params.get("extensionId")
-        if session_id in self._extension_sessions:
-            del self._extension_sessions[session_id]
-            logger.info(f"Extension unregistered: {session_id}")
+        async with self._lock:
+            if session_id in self._extension_sessions:
+                del self._extension_sessions[session_id]
+                logger.info(f"Extension unregistered: {session_id}")
         return {"status": "unregistered"}
 
     # Tabs API
-    async def _handle_tabs_list(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_tabs_list(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle tabs.list - forward to extension."""
-        # This will be forwarded to extension
         return await self._forward_to_extension("tabs.list", params)
 
-    async def _handle_tabs_open(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_tabs_open(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle tabs.open - forward to extension."""
         return await self._forward_to_extension("tabs.open", params)
 
-    async def _handle_tabs_claim(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_tabs_navigate(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Handle tabs.navigate - forward to extension."""
+        return await self._forward_to_extension("tabs.navigate", params)
+
+    async def _handle_tabs_claim(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle tabs.claim - forward to extension."""
         return await self._forward_to_extension("tabs.claim", params)
 
+    async def _handle_tabs_activate(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Activate the target tab and focus its window."""
+        return await self._forward_to_extension("tabs.activate", params)
+
     # Page API
-    async def _handle_page_snapshot(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_page_snapshot(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle page.snapshot - forward to extension."""
         return await self._forward_to_extension("page.snapshot", params)
 
-    async def _handle_page_click(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_page_click(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle page.click - forward to extension."""
         return await self._forward_to_extension("page.click", params)
 
-    async def _handle_page_fill(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_page_fill(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle page.fill - forward to extension."""
         return await self._forward_to_extension("page.fill", params)
 
-    async def _handle_page_keypress(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_page_keypress(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle page.keypress - forward to extension."""
         return await self._forward_to_extension("page.keypress", params)
 
-    async def _handle_page_scroll(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_page_scroll(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle page.scroll - forward to extension."""
         return await self._forward_to_extension("page.scroll", params)
 
-    async def _handle_page_wait(self, params: dict, client_id: str = None) -> dict:
+    async def _handle_page_wait(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle page.wait - forward to extension."""
         return await self._forward_to_extension("page.wait", params)
 
-    async def _forward_to_extension(self, method: str, params: dict) -> dict:
-        """Forward a request to the connected extension.
+    async def _handle_page_validate(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Handle page.validate - forward to extension."""
+        return await self._forward_to_extension("page.validate", params)
 
-        For now, return a mock response. In full implementation,
-        this would route to the correct extension session.
-        """
+    async def _handle_page_screenshot(
+        self, params: dict, client_id: str = None, writer=None
+    ) -> dict:
+        """Handle page.screenshot - forward to extension."""
+        return await self._forward_to_extension("page.screenshot", params)
+
+    async def _handle_page_extract(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Handle page.extract - forward to extension."""
+        return await self._forward_to_extension("page.extract", params)
+
+    async def _handle_page_text(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Extract full visible text from one referenced element."""
+        return await self._forward_to_extension("page.text", params)
+
+    async def _handle_page_images(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Discover images, optionally scrolling to trigger lazy loading."""
+        return await self._forward_to_extension("page.images", params)
+
+    async def _handle_page_download_images(
+        self, params: dict, client_id: str = None, writer=None
+    ) -> dict:
+        """Discover and download images through the user's Chrome profile."""
+        return await self._forward_to_extension("page.downloadImages", params)
+
+    async def _handle_page_media(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Discover video and audio resources in a page or container."""
+        return await self._forward_to_extension("page.media", params)
+
+    async def _handle_page_download_media(
+        self, params: dict, client_id: str = None, writer=None
+    ) -> dict:
+        """Download directly addressable media through Chrome."""
+        return await self._forward_to_extension("page.downloadMedia", params)
+
+    async def _handle_stop(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Handle system.stop - stop the daemon."""
+        logger.info("Received system.stop request, shutting down...")
+        # Schedule stop so response can be sent first
+        asyncio.create_task(self.stop())
+        return {"status": "stopping"}
+
+    async def _forward_to_extension(self, method: str, params: dict) -> dict:
+        """Forward a request to the connected extension and wait for response."""
         if not self._extension_sessions:
             return {
                 "error": "No extension connected",
                 "method": method,
             }
 
-        # TODO: Implement actual forwarding to extension
-        # For now, return a placeholder
-        return {
-            "forwarded": True,
+        # Get the first connected extension
+        session_id = next(iter(self._extension_sessions.keys()))
+        session = self._extension_sessions[session_id]
+        writer = session.get("writer")
+
+        if not writer:
+            return {
+                "error": "Extension writer not available",
+                "method": method,
+            }
+
+        # Generate a unique request ID for this forwarded request
+        request_id = f"fwd-{uuid.uuid4().hex[:8]}"
+
+        # Create the forwarded message
+        forwarded_message = {
+            "jsonrpc": "2.0",
+            "id": request_id,
             "method": method,
             "params": params,
-            "sessions": list(self._extension_sessions.keys()),
         }
+
+        try:
+            # Create a future to wait for the response
+            future = asyncio.Future()
+            self._pending_requests[request_id] = future
+
+            # Send the forwarded message to the extension
+            message_bytes = json.dumps(forwarded_message).encode("utf-8")
+            writer.write(struct.pack("<I", len(message_bytes)))
+            writer.write(message_bytes)
+            await writer.drain()
+
+            # Wait for the response with a timeout
+            try:
+                result = await asyncio.wait_for(future, timeout=30.0)
+                return result
+            except asyncio.TimeoutError:
+                return {
+                    "error": "Timeout waiting for extension response",
+                    "method": method,
+                }
+
+        except Exception as e:
+            logger.error(f"Error forwarding to extension: {e}")
+            return {
+                "error": f"Failed to forward to extension: {e}",
+                "method": method,
+            }
+        finally:
+            # Clean up the pending request
+            if request_id in self._pending_requests:
+                del self._pending_requests[request_id]
 
 
 async def run_daemon() -> None:

@@ -1,128 +1,92 @@
 #!/usr/bin/env bash
-#
-# Chrome Agent Extension Installer
-# Sets up Native Messaging Host and prepares extension for loading
-#
-
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$SCRIPT_DIR"
-NATIVE_HOST_NAME="com.browseruse.chrome_agent"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOST_NAME="com.browseruse.chrome_agent"
+EXTENSION_ID="${1:-${CHROME_AGENT_EXTENSION_ID:-}}"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "V1 installer currently supports macOS only." >&2
+  exit 2
+fi
 
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+if [[ ! "$EXTENSION_ID" =~ ^[a-p]{32}$ ]]; then
+  echo "Usage: ./install.sh <Chrome extension ID>" >&2
+  echo "First load ${PROJECT_DIR}/extension in chrome://extensions, then copy its ID." >&2
+  exit 2
+fi
 
-detect_chrome_profile() {
-    local profile_path=""
+BOOTSTRAP_PYTHON="${PYTHON_BIN:-$(command -v python3)}"
+VENV_DIR="${CHROME_AGENT_VENV:-$HOME/.local/share/chrome-agent/venv}"
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  "$BOOTSTRAP_PYTHON" -m venv "$VENV_DIR"
+fi
+"$VENV_DIR/bin/python" -m pip install -e "$PROJECT_DIR"
+PYTHON_BIN="$VENV_DIR/bin/python"
 
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        profile_path="$HOME/Library/Application Support/Google/Chrome"
-    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        # Linux
-        profile_path="$HOME/.config/google-chrome"
-    elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-        # Windows
-        profile_path="$LOCALAPPDATA/Google/Chrome/User Data"
-    fi
+LAUNCHER_PATH="$PROJECT_DIR/chrome_agent/native_host/launcher.sh"
+HOST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+HOST_MANIFEST="$HOST_DIR/$HOST_NAME.json"
+SKILL_SOURCE="$PROJECT_DIR/.agents/skills/chrome-agent"
+SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
+SKILL_TARGET="$SKILL_DIR/chrome-agent"
+BIN_DIR="$HOME/.local/bin"
+CLI_TARGET="$BIN_DIR/chrome-agent"
 
-    echo "$profile_path"
+mkdir -p "$HOST_DIR" "$SKILL_DIR" "$BIN_DIR"
+
+python3 - "$LAUNCHER_PATH" "$PYTHON_BIN" "$PROJECT_DIR" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+path, python_bin, project_dir = map(Path, sys.argv[1:])
+path.write_text(
+    "#!/usr/bin/env bash\n"
+    f'exec "{python_bin}" "{project_dir}/chrome_agent/native_host/native_host.py"\n',
+    encoding="utf-8",
+)
+os.chmod(path, 0o755)
+PY
+
+python3 - "$HOST_MANIFEST" "$HOST_NAME" "$LAUNCHER_PATH" "$EXTENSION_ID" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, name, launcher, extension_id = sys.argv[1:]
+manifest = {
+    "name": name,
+    "description": "Chrome Agent Native Messaging Host",
+    "path": launcher,
+    "type": "stdio",
+    "allowed_origins": [f"chrome-extension://{extension_id}/"],
 }
+Path(path).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
 
-generate_native_host_manifest() {
-    local extension_path="$1"
-    local manifest_path="$2"
+if [[ -L "$SKILL_TARGET" ]]; then
+  current_target="$(readlink "$SKILL_TARGET")"
+  if [[ "$current_target" != "$SKILL_SOURCE" ]]; then
+    echo "Refusing to replace existing skill symlink: $SKILL_TARGET -> $current_target" >&2
+    exit 3
+  fi
+elif [[ -e "$SKILL_TARGET" ]]; then
+  echo "Refusing to replace existing skill: $SKILL_TARGET" >&2
+  exit 3
+else
+  ln -s "$SKILL_SOURCE" "$SKILL_TARGET"
+fi
 
-    # Find Python executable
-    local python_path="${PROJECT_ROOT}/chrome_agent/native_host/launcher.sh"
+if [[ -e "$CLI_TARGET" && ! -L "$CLI_TARGET" ]]; then
+  echo "Refusing to replace existing CLI: $CLI_TARGET" >&2
+  exit 3
+fi
+ln -sfn "$VENV_DIR/bin/chrome-agent" "$CLI_TARGET"
 
-    cat > "$manifest_path" <<EOF
-{
-  "name": "$NATIVE_HOST_NAME",
-  "description": "Chrome Agent Native Messaging Host",
-  "path": "$python_path",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://*"
-  ]
-}
-EOF
-}
-
-main() {
-    log_info "Chrome Agent Extension Installer"
-    log_info "================================="
-
-    # Detect Chrome profile
-    local chrome_profile
-    chrome_profile=$(detect_chrome_profile)
-
-    if [[ -z "$chrome_profile" ]]; then
-        log_error "Could not detect Chrome profile. Please specify manually."
-        exit 1
-    fi
-
-    log_info "Chrome profile: $chrome_profile"
-
-    # Create Native Messaging Host directory
-    local native_host_dir="$chrome_profile/NativeMessagingHosts"
-    mkdir -p "$native_host_dir"
-
-    # Generate Native Host manifest
-    local manifest_path="$native_host_dir/$NATIVE_HOST_NAME.json"
-    generate_native_host_manifest "$PROJECT_ROOT/extension" "$manifest_path"
-
-    log_info "Native Host manifest: $manifest_path"
-
-    # Create launcher script
-    local launcher_path="${PROJECT_ROOT}/chrome_agent/native_host/launcher.sh"
-    mkdir -p "$(dirname "$launcher_path")"
-    cat > "$launcher_path" <<EOF
-#!/usr/bin/env bash
-# Auto-generated launcher for Chrome Agent Native Host
-exec "$(which python3)" "${PROJECT_ROOT}/chrome_agent/native_host/native_host.py"
-EOF
-    chmod +x "$launcher_path"
-
-    log_info "Launcher: $launcher_path"
-
-    # Verify extension structure
-    log_info "Verifying extension structure..."
-    local ext_dir="$PROJECT_ROOT/extension"
-
-    for file in "manifest.json" "background.js" "content.js"; do
-        if [[ ! -f "$ext_dir/$file" ]]; then
-            log_error "Missing: $file"
-            exit 1
-        fi
-        log_info "✓ $file"
-    done
-
-    for icon in "icon16.png" "icon48.png" "icon128.png"; do
-        if [[ ! -f "$ext_dir/icons/$icon" ]]; then
-            log_warn "Missing icon: $icon (using placeholder)"
-        fi
-    done
-
-    log_info ""
-    log_info "Installation complete!"
-    log_info ""
-    log_info "Next steps:"
-    log_info "1. Open Chrome and navigate to chrome://extensions"
-    log_info "2. Enable Developer mode (top right)"
-    log_info "3. Click Load unpacked and select: $ext_dir"
-    log_info "4. Note the extension ID (e.g., abcdefgh...)"
-    log_info "5. Update allowed_origins in $manifest_path with the real extension ID"
-    log_info ""
-    log_info "To test: chrome-agent ensure --launch-if-missing"
-}
-
-main "$@"
+echo "Installed CLI, daemon, Native Messaging Host, and Chrome Agent Skill."
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  echo "Add $BIN_DIR to PATH before invoking chrome-agent by name."
+fi
+echo "Reload Chrome Agent in chrome://extensions, then run:"
+echo "  chrome-agent ensure --launch-if-missing --wait-for-extension --json"

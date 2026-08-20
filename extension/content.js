@@ -74,7 +74,16 @@
     }
 
     const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+    if (rect.width > 0 && rect.height > 0) return true;
+    if (element instanceof HTMLAnchorElement && element.href) {
+      let parent = element.parentElement;
+      while (parent && parent !== document.body) {
+        const parentRect = parent.getBoundingClientRect();
+        if (parentRect.width > 0 && parentRect.height > 0) return true;
+        parent = parent.parentElement;
+      }
+    }
+    return false;
   }
 
   /**
@@ -83,7 +92,18 @@
   function isInViewport(element) {
     if (!element) return false;
 
-    const rect = element.getBoundingClientRect();
+    let rect = element.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0 && element instanceof HTMLAnchorElement) {
+      let parent = element.parentElement;
+      while (parent && parent !== document.body) {
+        const parentRect = parent.getBoundingClientRect();
+        if (parentRect.width > 0 && parentRect.height > 0) {
+          rect = parentRect;
+          break;
+        }
+        parent = parent.parentElement;
+      }
+    }
     return (
       rect.top >= 0 &&
       rect.left >= 0 &&
@@ -92,25 +112,26 @@
     );
   }
 
+  // Interactive tags and roles (shared)
+  const INTERACTIVE_TAGS = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'DETAILS', 'SUMMARY'];
+  const INTERACTIVE_ROLES = [
+    'button', 'link', 'checkbox', 'radio', 'switch', 'textbox',
+    'combobox', 'listbox', 'option', 'menuitem', 'slider',
+    'spinbutton', 'searchbox', 'tab'
+  ];
+
   /**
    * Check if element is interactive
    */
   function isInteractive(element) {
     if (!element) return false;
 
-    const interactiveTags = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'DETAILS', 'SUMMARY'];
-    const interactiveRoles = [
-      'button', 'link', 'checkbox', 'radio', 'switch', 'textbox',
-      'combobox', 'listbox', 'option', 'menuitem', 'slider',
-      'spinbutton', 'searchbox', 'tab'
-    ];
-
-    if (interactiveTags.includes(element.tagName)) {
+    if (INTERACTIVE_TAGS.includes(element.tagName)) {
       return true;
     }
 
     const role = element.getAttribute('role');
-    if (role && interactiveRoles.includes(role)) {
+    if (role && INTERACTIVE_ROLES.includes(role)) {
       return true;
     }
 
@@ -186,6 +207,7 @@
     return {
       ref: getElementRef(element),
       tag: element.tagName.toLowerCase(),
+      href: element instanceof HTMLAnchorElement ? element.href : null,
       role: element.getAttribute('role') || null,
       name: element.getAttribute('name') || null,
       id: element.id || null,
@@ -197,7 +219,7 @@
         visible: isVisible(element),
         inViewport: isInViewport(element),
         enabled: !element.disabled,
-        focusable: element.tabIndex >= 0 || interactiveTags.includes(element.tagName),
+        focusable: element.tabIndex >= 0 || INTERACTIVE_TAGS.includes(element.tagName),
         focused: document.activeElement === element,
       },
       rect: {
@@ -285,7 +307,7 @@
   /**
    * Capture screenshot of element or viewport
    */
-  async function captureScreenshot(scope = 'viewport', ref = null) {
+  async function captureScreenshot(scope = 'viewport', ref = null, regionRect = null) {
     try {
       let targetElement = null;
       let rect = null;
@@ -296,8 +318,8 @@
           return { success: false, error: 'Element not found for screenshot' };
         }
         rect = targetElement.getBoundingClientRect();
-      } else if (scope === 'region' && params?.rect) {
-        rect = params.rect;
+      } else if (scope === 'region' && regionRect) {
+        rect = regionRect;
       } else {
         // Viewport screenshot
         rect = {
@@ -439,12 +461,147 @@
   /**
    * Scroll page or element
    */
-  function performScroll(dx = 0, dy = 0) {
-    window.scrollBy(dx, dy);
+  function isScrollable(element) {
+    if (!element) return false;
+    if (element === document.scrollingElement) {
+      return element.scrollHeight > element.clientHeight;
+    }
+    const style = window.getComputedStyle(element);
+    return /(auto|scroll|overlay)/.test(style.overflowY) &&
+      element.scrollHeight > element.clientHeight + 1;
+  }
+
+  function findScrollTarget(ref = null) {
+    const referenced = ref ? getElementByRef(ref) : null;
+    let candidate = referenced;
+    while (candidate && candidate !== document.body) {
+      if (isScrollable(candidate)) return candidate;
+      candidate = candidate.parentElement;
+    }
+
+    const visibleCandidates = Array.from(document.querySelectorAll('*'))
+      .filter(isScrollable)
+      .filter(isVisible)
+      .sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return (bRect.width * bRect.height) - (aRect.width * aRect.height);
+      });
+    return visibleCandidates[0] || document.scrollingElement || document.documentElement;
+  }
+
+  function performScroll(dx = 0, dy = 0, ref = null) {
+    const target = findScrollTarget(ref);
+    const isDocument = target === document.scrollingElement ||
+      target === document.documentElement || target === document.body;
+    const beforeX = isDocument ? window.scrollX : target.scrollLeft;
+    const beforeY = isDocument ? window.scrollY : target.scrollTop;
+
+    if (isDocument) {
+      window.scrollBy(dx, dy);
+    } else {
+      target.scrollBy(dx, dy);
+      target.dispatchEvent(new WheelEvent('wheel', {
+        deltaX: dx,
+        deltaY: dy,
+        bubbles: true,
+        cancelable: true,
+        view: window,
+      }));
+    }
+
+    const afterX = isDocument ? window.scrollX : target.scrollLeft;
+    const afterY = isDocument ? window.scrollY : target.scrollTop;
+    return {
+      success: afterX !== beforeX || afterY !== beforeY,
+      moved: afterX !== beforeX || afterY !== beforeY,
+      target: isDocument ? 'document' : getElementRef(target),
+      scrollX: afterX,
+      scrollY: afterY,
+      maxScrollY: Math.max(0, target.scrollHeight - target.clientHeight),
+    };
+  }
+
+  function collectImages(root = document) {
+    const images = new Map();
+    const addImage = (url, metadata = {}) => {
+      if (!url) return;
+      let absoluteUrl;
+      try {
+        absoluteUrl = new URL(url, window.location.href).href;
+      } catch (_) {
+        return;
+      }
+      if (!/^https?:/i.test(absoluteUrl)) return;
+      const existing = images.get(absoluteUrl) || {};
+      images.set(absoluteUrl, { ...existing, ...metadata, src: absoluteUrl });
+    };
+
+    const queryWithin = selector => {
+      const matches = Array.from(root.querySelectorAll(selector));
+      if (root instanceof Element && root.matches(selector)) matches.unshift(root);
+      return matches;
+    };
+
+    queryWithin('img').forEach(img => {
+      addImage(img.currentSrc || img.src || img.getAttribute('src') || img.dataset.src, {
+        alt: img.alt || null,
+        width: img.naturalWidth || null,
+        height: img.naturalHeight || null,
+        source: 'img',
+      });
+      const srcset = img.getAttribute('srcset') || img.dataset.srcset;
+      if (srcset) {
+        srcset.split(',').forEach(candidate => addImage(candidate.trim().split(/\s+/)[0], {
+          alt: img.alt || null,
+          source: 'srcset',
+        }));
+      }
+    });
+
+    queryWithin('source[srcset]').forEach(source => {
+      source.srcset.split(',').forEach(candidate => addImage(candidate.trim().split(/\s+/)[0], {
+        source: 'source-srcset',
+      }));
+    });
+
+    queryWithin('*').forEach(element => {
+      const backgroundImage = window.getComputedStyle(element).backgroundImage;
+      if (!backgroundImage || backgroundImage === 'none') return;
+      for (const match of backgroundImage.matchAll(/url\(["']?([^"')]+)["']?\)/g)) {
+        addImage(match[1], { source: 'background-image' });
+      }
+    });
+
+    return Array.from(images.values());
+  }
+
+  async function loadAndCollectImages(maxScrolls = 12, settleMs = 500, ref = null) {
+    const collected = new Map();
+    const root = ref ? getElementByRef(ref) : document;
+    if (!root) return { success: false, error: 'Image scope element not found' };
+    const remember = () => collectImages(root).forEach(image => collected.set(image.src, image));
+    const target = findScrollTarget(ref);
+    const isDocument = target === document.scrollingElement ||
+      target === document.documentElement || target === document.body;
+
+    remember();
+    for (let step = 0; step < Math.max(0, maxScrolls); step += 1) {
+      const before = isDocument ? window.scrollY : target.scrollTop;
+      const amount = Math.max(300, Math.floor((isDocument ? window.innerHeight : target.clientHeight) * 0.8));
+      if (isDocument) window.scrollBy(0, amount);
+      else target.scrollBy(0, amount);
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, settleMs)));
+      remember();
+      const after = isDocument ? window.scrollY : target.scrollTop;
+      if (after === before) break;
+    }
+
     return {
       success: true,
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
+      images: Array.from(collected.values()),
+      count: collected.size,
+      scrollTarget: isDocument ? 'document' : getElementRef(target),
     };
   }
 
@@ -645,6 +802,146 @@
     });
   }
 
+  /**
+   * Extract structured page data for content scraping.
+   */
+  function extractPageData() {
+    const links = [];
+    document.querySelectorAll('a').forEach(a => {
+      const href = a.href;
+      const text = (a.textContent || '').trim();
+      if (href && !href.startsWith('javascript:')) {
+        links.push({
+          href: href,
+          text: text.substring(0, 500),
+          title: a.getAttribute('title') || null,
+        });
+      }
+    });
+
+    const images = collectImages();
+
+    const headings = [];
+    document.querySelectorAll('h1, h2, h3, h4').forEach(h => {
+      headings.push({
+        tag: h.tagName.toLowerCase(),
+        text: (h.textContent || '').trim().substring(0, 1000),
+      });
+    });
+
+    const paragraphs = [];
+    document.querySelectorAll('p, div[role="article"], article, section').forEach(el => {
+      const text = (el.textContent || '').trim();
+      if (text.length > 20 && text.length < 5000) {
+        paragraphs.push(text.substring(0, 2000));
+      }
+    });
+
+    return {
+      url: window.location.href,
+      title: document.title,
+      documentId: DOCUMENT_ID,
+      links: links,
+      images: images,
+      headings: headings,
+      paragraphs: paragraphs,
+    };
+  }
+
+  function extractElementText(ref, maxChars = 20000) {
+    const element = getElementByRef(ref);
+    if (!element) return { success: false, error: 'Text element not found' };
+    const limit = Math.min(Math.max(Number(maxChars) || 20000, 1), 200000);
+    const fullText = (element.innerText || element.textContent || '').trim();
+    return {
+      success: true,
+      ref,
+      documentId: DOCUMENT_ID,
+      text: fullText.slice(0, limit),
+      length: fullText.length,
+      returnedLength: Math.min(fullText.length, limit),
+      truncated: fullText.length > limit,
+    };
+  }
+
+  function classifyMediaUrl(url) {
+    if (!url) return { urlType: 'missing', downloadable: false };
+    if (url.startsWith('blob:')) return { urlType: 'blob', downloadable: false };
+    if (/\.m3u8(?:$|\?)/i.test(url)) return { urlType: 'hls', downloadable: false };
+    if (/\.mpd(?:$|\?)/i.test(url)) return { urlType: 'dash', downloadable: false };
+    if (/^https?:/i.test(url)) return { urlType: 'direct', downloadable: true };
+    return { urlType: 'unsupported', downloadable: false };
+  }
+
+  function collectMedia(root = document) {
+    const media = new Map();
+    const addMedia = (type, url, metadata = {}) => {
+      if (!url) return;
+      let resolved = url;
+      if (!url.startsWith('blob:')) {
+        try {
+          resolved = new URL(url, window.location.href).href;
+        } catch (_) {
+          return;
+        }
+      }
+      const key = `${type}:${resolved}`;
+      const classification = classifyMediaUrl(resolved);
+      media.set(key, {
+        ...(media.get(key) || {}),
+        type,
+        url: resolved,
+        ...classification,
+        ...metadata,
+      });
+    };
+    const queryWithin = selector => {
+      const matches = Array.from(root.querySelectorAll(selector));
+      if (root instanceof Element && root.matches(selector)) matches.unshift(root);
+      return matches;
+    };
+
+    queryWithin('video, audio').forEach(element => {
+      const type = element.tagName.toLowerCase();
+      const common = {
+        source: 'media-element',
+        duration: Number.isFinite(element.duration) ? element.duration : null,
+        width: element.videoWidth || null,
+        height: element.videoHeight || null,
+        poster: element.poster || null,
+      };
+      addMedia(type, element.currentSrc || element.src, common);
+      element.querySelectorAll('source[src]').forEach(source => {
+        addMedia(type, source.src, { ...common, source: 'source-element', mimeType: source.type || null });
+      });
+    });
+
+    queryWithin('script[type="application/ld+json"]').forEach(script => {
+      try {
+        const walk = value => {
+          if (Array.isArray(value)) return value.forEach(walk);
+          if (!value || typeof value !== 'object') return;
+          const schemaType = value['@type'];
+          if (schemaType === 'VideoObject' || schemaType === 'AudioObject') {
+            const type = schemaType === 'VideoObject' ? 'video' : 'audio';
+            addMedia(type, value.contentUrl || value.embedUrl, {
+              source: 'json-ld',
+              name: value.name || null,
+              durationText: value.duration || null,
+              thumbnailUrl: value.thumbnailUrl || null,
+              uploadDate: value.uploadDate || null,
+            });
+          }
+          Object.values(value).forEach(walk);
+        };
+        walk(JSON.parse(script.textContent));
+      } catch (_) {
+        // Ignore malformed third-party structured data.
+      }
+    });
+    return Array.from(media.values());
+  }
+
   // Listen for messages from background script
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log("Content script received:", request);
@@ -672,12 +969,27 @@
         break;
 
       case 'scroll':
-        const scrollResult = performScroll(params?.dx, params?.dy);
+        const scrollResult = performScroll(params?.dx, params?.dy, params?.ref);
         sendResponse(scrollResult);
         break;
 
+      case 'images':
+        const imageRoot = params?.ref ? getElementByRef(params.ref) : document;
+        if (!imageRoot) {
+          sendResponse({ success: false, error: 'Image scope element not found' });
+          break;
+        }
+        if (params?.load) {
+          loadAndCollectImages(params?.maxScrolls, params?.settleMs, params?.ref)
+            .then(result => sendResponse(result));
+        } else {
+          const images = collectImages(imageRoot);
+          sendResponse({ success: true, images, count: images.length });
+        }
+        break;
+
       case 'screenshot':
-        captureScreenshot(params?.scope || 'viewport', params?.ref)
+        captureScreenshot(params?.scope || 'viewport', params?.ref, params?.rect)
           .then(result => sendResponse(result));
         break;
 
@@ -712,6 +1024,24 @@
       case 'validate':
         const validationResult = validateElement(params?.ref);
         sendResponse(validationResult);
+        break;
+
+      case 'extract':
+        sendResponse(extractPageData());
+        break;
+
+      case 'text':
+        sendResponse(extractElementText(params?.ref, params?.maxChars));
+        break;
+
+      case 'media':
+        const mediaRoot = params?.ref ? getElementByRef(params.ref) : document;
+        if (!mediaRoot) {
+          sendResponse({ success: false, error: 'Media scope element not found' });
+          break;
+        }
+        const media = collectMedia(mediaRoot);
+        sendResponse({ success: true, media, count: media.length });
         break;
 
       default:

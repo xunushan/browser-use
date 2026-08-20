@@ -9,7 +9,13 @@ def test_extension_structure():
     ext_dir = pathlib.Path(__file__).parent.parent / "extension"
 
     # Required files
-    required_files = ["manifest.json", "background.js", "content.js"]
+    required_files = [
+        "manifest.json",
+        "background.js",
+        "content.js",
+        "popup.html",
+        "popup.js",
+    ]
     for file in required_files:
         assert (ext_dir / file).exists(), f"Missing required file: {file}"
 
@@ -28,30 +34,13 @@ def test_manifest_valid():
     assert "permissions" in manifest
     assert "nativeMessaging" in manifest["permissions"]
     assert "activeTab" in manifest["permissions"]
+    assert "downloads" in manifest["permissions"]
 
     # Check background script exists
     bg_script = manifest["background"]["service_worker"]
     assert (ext_dir / bg_script).exists(), f"Background script missing: {bg_script}"
 
     # Check icons exist (or are placeholders)
-    for size, path in manifest.get("icons", {}).items():
+    for _size, path in manifest.get("icons", {}).items():
         icon_path = ext_dir / path
         assert icon_path.exists(), f"Icon missing: {path}"
-
-
-def test_native_host_manifest_template():
-    """Verify Native Host manifest template exists."""
-    project_root = pathlib.Path(__file__).parent.parent
-    manifest_path = (
-        project_root
-        / "chrome_agent"
-        / "native_host"
-        / "com.browseruse.chrome_agent.json"
-    )
-    assert manifest_path.exists(), "Native Host manifest template missing"
-
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-
-    assert manifest["name"] == "com.browseruse.chrome_agent"
-    assert manifest["type"] == "stdio"

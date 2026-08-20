@@ -1,13 +1,13 @@
 """JSON-RPC protocol implementation for Chrome Agent."""
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 
 class JsonRpcError(Exception):
     """JSON-RPC error."""
 
-    def __init__(self, code: int, message: str, data: Optional[dict] = None):
+    def __init__(self, code: int, message: str, data: dict | None = None):
         self.code = code
         self.message = message
         self.data = data
@@ -49,7 +49,12 @@ def create_response(result: Any, request_id: str) -> dict:
     }
 
 
-def create_error_response(code: int, message: str, request_id: Optional[str] = None, data: Optional[dict] = None) -> dict:
+def create_error_response(
+    code: int,
+    message: str,
+    request_id: str | None = None,
+    data: dict | None = None,
+) -> dict:
     """Create a JSON-RPC error response."""
     response = {
         "jsonrpc": "2.0",
@@ -72,4 +77,4 @@ def parse_message(data: bytes) -> dict:
             raise JsonRpcError(INVALID_REQUEST, "Request must be an object")
         return message
     except json.JSONDecodeError as e:
-        raise JsonRpcError(PARSE_ERROR, f"Parse error: {e}")
+        raise JsonRpcError(PARSE_ERROR, f"Parse error: {e}") from e

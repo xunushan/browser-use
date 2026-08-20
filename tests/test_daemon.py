@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import socket
 import struct
 from pathlib import Path
 
@@ -35,6 +34,7 @@ class TestDaemonLifecycle:
 
         # Cleanup
         await daemon.stop()
+        await task
         if daemon.socket_path.exists():
             daemon.socket_path.unlink()
 
@@ -150,24 +150,7 @@ class TestDaemonLifecycle:
         assert "No extension connected" in response["result"]["error"]
 
     @pytest.mark.asyncio
-    async def test_tabs_list_with_extension(self, daemon):
-        """Test tabs.list forwards to extension."""
-        # Register extension first
-        await self._send_request(
-            daemon.socket_path,
-            "session.register",
-            {"extensionId": "test-ext-789"},
-        )
-
-        response = await self._send_request(
-            daemon.socket_path,
-            "tabs.list",
-            {"domain": "example.com"},
-        )
-
-        assert "result" in response
-        assert response["result"]["forwarded"] is True
-        assert response["result"]["method"] == "tabs.list"
+    async def test_socket_permissions(self, daemon):
         """Test that socket has correct permissions."""
         import stat
 
