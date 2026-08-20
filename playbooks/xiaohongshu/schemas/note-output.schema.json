@@ -34,9 +34,10 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["index", "text"],
+            "required": ["index", "author", "text"],
             "properties": {
               "index": {"type": "integer"},
+              "author": {"type": "string"},
               "text": {"type": "string"}
             },
             "additionalProperties": false

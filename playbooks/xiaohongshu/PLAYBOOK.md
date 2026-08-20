@@ -92,7 +92,7 @@ chrome-agent page scroll --tab-id <id> --ref <comments-ref> --dy 700 --json
 chrome-agent page text --tab-id <id> --ref <comments-ref> --max-chars 100000 --json
 ```
 
-评论仅代表 Web 页面当前滚动/展开后已加载的内容。需要更多评论时，智能体先点击“展开 N 条回复”，滚动评论容器直到无新增或达到任务限制，再解析新 ref。
+评论仅代表 Web 页面当前滚动/展开后已加载的内容。`note.json` 的 `comments.items` 是 `{author, text}` 记录；时间/地区、点赞、回复按钮、回复展开提示和作者徽标等 UI 元数据不会写入每条评论，完整页面原始文本保留在 `comments.rawText`。需要更多评论时，智能体先点击“展开 N 条回复”，滚动评论容器直到无新增或达到任务限制，再解析新 ref。
 
 ## 图片与视频
 

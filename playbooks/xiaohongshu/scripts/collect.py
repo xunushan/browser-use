@@ -68,12 +68,39 @@ def extract_text(tab_id: int, ref: str | None, max_chars: int) -> dict:
 
 
 def comment_items(text: str) -> list[dict]:
-    """Keep the raw text while making every visible comment line readable."""
+    """Convert the visible Xiaohongshu comment stream into comment records.
+
+    `innerText` interleaves each comment with time/place, like counts and reply
+    controls. A time line terminates the preceding author/body pair. The raw
+    stream is retained separately because collapsed replies are not available.
+    """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return [
-        {"index": index, "text": line}
-        for index, line in enumerate(lines, start=1)
-    ]
+    time_or_place = re.compile(
+        r"^(?:\d+\s*(?:秒|分钟|分|小时|天)前|\d{4}-\d{2}-\d{2}|\d{2}-\d{2}).*$"
+    )
+    ui_text = re.compile(r"^(?:共\s*\d+\s*条评论|赞|回复|作者|展开\s*\d+\s*条回复|\d+)$")
+    records: list[dict] = []
+    pending: list[str] = []
+
+    def flush() -> None:
+        nonlocal pending
+        meaningful = [line for line in pending if not ui_text.fullmatch(line)]
+        pending = []
+        if len(meaningful) < 2:
+            return
+        records.append({
+            "index": len(records) + 1,
+            "author": meaningful[0],
+            "text": "\n".join(meaningful[1:]),
+        })
+
+    for line in lines:
+        if time_or_place.fullmatch(line):
+            flush()
+        elif not ui_text.fullmatch(line):
+            pending.append(line)
+    flush()
+    return records
 
 
 def is_note_image(image: dict) -> bool:
