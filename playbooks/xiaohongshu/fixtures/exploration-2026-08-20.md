@@ -9,11 +9,10 @@
 
 ## 搜索页发现
 
-- 结果卡片为 `section.note-item`；其内部 `/explore/<id>` anchor 在 DOM 中可能为 0×0 overlay。
-- DOM anchor href 本身可能不含 `xsec_token`；用户真实点击产生的详情 URL 会包含访问上下文。
-- 仅依据裸 href 直接导航可能进入 App-only/不可访问页。
-- 当前合成点击卡片 section 没有打开详情；需点击 overlay anchor，或在 V2 用 CDP 真实输入事件。
-- 已给零尺寸 anchor 增加可见父容器 rect 回退，待扩展重载后回归。
+- 当前搜索结果的可点击卡片为带 `xsec_token` 的 `/search_result/<id>` anchor，常见 class 为 `cover mask ld`；标题由同 href 的 `a.title` 给出。
+- 旧形态中也出现过零尺寸 `/explore/<id>` overlay anchor；它不是当前搜索页的候选规则。
+- 仅依据裸 href 直接导航可能进入 App-only/不可访问页；必须保留当次页面返回的完整 href。
+- 已为零尺寸 anchor 的 snapshot rect 加入可见祖先回退；候选规则仍会过滤掉无尺寸、不可见链接。
 
 ## 图文样例
 
@@ -57,4 +56,3 @@ media(player ref) + media(page) → download-media(page)
 - blob/HLS/DASH 下载。
 
 这些限制必须由 Playbook 明确报告，不能把“当前已加载评论”描述为“全部评论”，也不能把裸 `/explore/<id>` 当作可复用详情 URL。
-

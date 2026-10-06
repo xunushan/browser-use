@@ -62,6 +62,21 @@
     return null;
   }
 
+  /** Return a clickable overlay anchor's visible ancestor rect when needed. */
+  function getEffectiveRect(element) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return rect;
+    if (element instanceof HTMLAnchorElement && element.href) {
+      let parent = element.parentElement;
+      while (parent && parent !== document.body) {
+        const parentRect = parent.getBoundingClientRect();
+        if (parentRect.width > 0 && parentRect.height > 0) return parentRect;
+        parent = parent.parentElement;
+      }
+    }
+    return rect;
+  }
+
   /**
    * Check if element is visible
    */
@@ -73,17 +88,8 @@
       return false;
     }
 
-    const rect = element.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) return true;
-    if (element instanceof HTMLAnchorElement && element.href) {
-      let parent = element.parentElement;
-      while (parent && parent !== document.body) {
-        const parentRect = parent.getBoundingClientRect();
-        if (parentRect.width > 0 && parentRect.height > 0) return true;
-        parent = parent.parentElement;
-      }
-    }
-    return false;
+    const rect = getEffectiveRect(element);
+    return rect.width > 0 && rect.height > 0;
   }
 
   /**
@@ -92,18 +98,7 @@
   function isInViewport(element) {
     if (!element) return false;
 
-    let rect = element.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0 && element instanceof HTMLAnchorElement) {
-      let parent = element.parentElement;
-      while (parent && parent !== document.body) {
-        const parentRect = parent.getBoundingClientRect();
-        if (parentRect.width > 0 && parentRect.height > 0) {
-          rect = parentRect;
-          break;
-        }
-        parent = parent.parentElement;
-      }
-    }
+    const rect = getEffectiveRect(element);
     return (
       rect.top >= 0 &&
       rect.left >= 0 &&
@@ -183,7 +178,7 @@
   function getElementInfo(element) {
     if (!element) return null;
 
-    const rect = element.getBoundingClientRect();
+    const rect = getEffectiveRect(element);
     const isSensitive = isSensitiveField(element);
 
     // Build locator hints

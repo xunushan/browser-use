@@ -55,7 +55,8 @@ class TestContentScript:
         script = Path(__file__).parent.parent / "extension" / "content.js"
         content = script.read_text()
 
-        assert "element instanceof HTMLAnchorElement" in content
+        assert "getEffectiveRect" in content
+        assert "const rect = getEffectiveRect(element);" in content
         assert "parentRect.width > 0" in content
 
     def test_content_script_has_document_id(self):

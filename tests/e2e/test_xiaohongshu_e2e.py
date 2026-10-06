@@ -64,13 +64,13 @@ def main() -> int:
         "--tab-id",
         str(tab_id),
         "--selector",
-        'a[href*="/explore/"]',
+        'a[href*="/search_result/"]',
         "--timeout",
         "15000",
     )
     extracted = cli("page", "extract", "--tab-id", str(tab_id))
     note_links = [
-        link for link in extracted.get("links", []) if "/explore/" in link.get("href", "")
+        link for link in extracted.get("links", []) if "/search_result/" in link.get("href", "")
     ]
     print(
         json.dumps(

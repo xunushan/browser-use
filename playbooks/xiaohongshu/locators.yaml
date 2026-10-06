@@ -1,0 +1,67 @@
+version: 2
+
+# Page semantics for xiaohongshu.com. Scripts read these rules and resolve live
+# refs from the current snapshot; they must not inline site selectors themselves.
+
+search:
+  result_link:
+    tag: a
+    class_contains: [cover, mask]
+    href_path_prefix: /search_result/
+    required_query_keys: [xsec_token]
+    visible: true
+    min_width: 1
+    min_height: 1
+  result_title_link:
+    tag: a
+    class_contains: [title]
+    href_path_prefix: /search_result/
+    visible: true
+  result_card:
+    tag: section
+    class_contains: [note-item]
+    visible: true
+
+detail:
+  # Any one of these being present means a note detail is on screen. A note is
+  # rendered as an overlay over the results page, or as a standalone page, or
+  # with a different container, depending on window width.
+  open_markers: [container, mask]
+  container:
+    class_contains: [note-container]
+    visible: true
+  mask:
+    class_contains: [note-detail-mask]
+    visible: true
+  # Xiaohongshu hides this button in the narrow layout, so it is only the first
+  # attempt; `dismiss_keys` below is the fallback that actually works there.
+  close_control:
+    tag: button
+    class_contains: [close-icon]
+    visible: true
+  dismiss_keys: [Escape]
+  body:
+    class_contains: [note-text]
+    visible: true
+  image_media:
+    class_contains: [xhs-slider-container]
+    visible: true
+  video_media:
+    class_contains: [video-player-media]
+    visible: true
+  comments:
+    class_contains: [comments-container]
+    visible: true
+  comments_scroll_target:
+    class_contains: [note-scroller]
+    visible: true
+
+scroll:
+  comments:
+    dy: 900
+    max_steps: 30
+    # Evaluated in order; the first rule that fires ends the loop.
+    #   moved_false  - the CLI reports the container could not move further
+    #   no_progress  - position and max scroll are unchanged from the last step
+    #   at_max       - scrollY has reached maxScrollY
+    stop_when: [moved_false, no_progress]

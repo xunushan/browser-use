@@ -11,6 +11,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from runtime import find_first, load_locators, should_stop_scroll
+
 
 def chrome_agent(*args: str) -> dict:
     result = subprocess.run(
@@ -65,6 +67,76 @@ def extract_text(tab_id: int, ref: str | None, max_chars: int) -> dict:
         "length": int(result.get("length", 0)),
         "truncated": bool(result.get("truncated")),
     }
+
+
+def snapshot(tab_id: int) -> dict:
+    return chrome_agent("page", "snapshot", "--tab-id", str(tab_id), "--scope", "full")
+
+
+def load_comments(
+    tab_id: int, config: dict, max_steps: int, fallback_ref: str | None
+) -> tuple[str | None, list[str]]:
+    """Scroll the configured note scroller until a configured rule says stop.
+
+    The stop rules come from `locators.yaml`; see `runtime.should_stop_scroll`.
+    Comments mount lazily, so the container is re-resolved after every step.
+    """
+    warnings: list[str] = []
+    rules = config["detail"]
+    scroll_config = config["scroll"]["comments"]
+    stop_when = scroll_config.get("stop_when") or ["moved_false"]
+    comments_ref: str | None = None
+    stopped_by: str | None = None
+    previous_step: dict | None = None
+    steps = 0
+    for steps in range(1, max_steps + 1):
+        page = snapshot(tab_id)
+        comments = find_first(page, rules["comments"])
+        if comments:
+            comments_ref = comments["ref"]
+        target = find_first(page, rules["comments_scroll_target"])
+        if not target:
+            # Some layouts render the whole thread at once with no scroll
+            # container. That is only a problem when nothing mounted yet.
+            if not comments:
+                warnings.append("未找到评论滚动容器，无法触发评论懒加载")
+            stopped_by = "no_scroll_target"
+            break
+        step = chrome_agent(
+            "page",
+            "scroll",
+            "--tab-id",
+            str(tab_id),
+            "--ref",
+            target["ref"],
+            "--dy",
+            str(scroll_config["dy"]),
+        )
+        stopped_by = should_stop_scroll(stop_when, step, previous_step)
+        if stopped_by:
+            break
+        previous_step = step
+    final_comments = find_first(snapshot(tab_id), rules["comments"])
+    if final_comments:
+        comments_ref = final_comments["ref"]
+    if not comments_ref:
+        comments_ref = fallback_ref
+    if stopped_by is None and max_steps:
+        warnings.append(f"评论滚动达到上限 {steps} 步，当前评论可能不完整")
+    if not comments_ref:
+        warnings.append("评论容器未在滚动终止前出现")
+    return comments_ref, warnings
+
+
+def resolve_refs(
+    page: dict, config: dict, fallbacks: dict[str, str | None]
+) -> dict[str, str | None]:
+    """Resolve several refs against one snapshot, keeping explicit fallbacks."""
+    resolved = {}
+    for name, fallback in fallbacks.items():
+        element = find_first(page, config["detail"][name])
+        resolved[name] = element["ref"] if element else fallback
+    return resolved
 
 
 def comment_items(text: str) -> list[dict]:
@@ -144,11 +216,21 @@ def organize_downloads(downloads: list[dict], directory: Path, warnings: list[st
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tab-id", required=True, type=int)
-    parser.add_argument("--body-ref", required=True)
-    parser.add_argument("--comments-ref")
-    parser.add_argument("--images-ref")
-    parser.add_argument("--media-ref")
-    parser.add_argument("--comment-scrolls", type=int, default=0)
+    parser.add_argument(
+        "--body-ref", help="Optional fallback; normally resolved from locators.yaml"
+    )
+    parser.add_argument(
+        "--comments-ref", help="Optional fallback; normally resolved from locators.yaml"
+    )
+    parser.add_argument(
+        "--images-ref", help="Optional fallback; normally resolved from locators.yaml"
+    )
+    parser.add_argument(
+        "--media-ref", help="Optional fallback; normally resolved from locators.yaml"
+    )
+    parser.add_argument(
+        "--comment-scrolls", type=int, help="Override locators.yaml comment scroll limit"
+    )
     parser.add_argument("--download-images", action="store_true")
     parser.add_argument("--download-media", action="store_true")
     parser.add_argument("--prefix", default="xiaohongshu-note")
@@ -164,32 +246,37 @@ def main() -> int:
     note_dir = args.output_dir or args.output.parent
     output_path = (args.output_dir / "note.json") if args.output_dir else args.output
 
-    warnings = []
-    for _ in range(max(0, args.comment_scrolls)):
-        if not args.comments_ref:
-            break
-        moved = chrome_agent(
-            "page",
-            "scroll",
-            "--tab-id",
-            str(args.tab_id),
-            "--ref",
-            args.comments_ref,
-            "--dy",
-            "700",
-        )
-        if not moved.get("moved"):
-            break
+    config = load_locators()
+    configured_limit = config["scroll"]["comments"]["max_steps"]
+    requested_limit = args.comment_scrolls
+    comment_limit = max(0, requested_limit if requested_limit is not None else configured_limit)
+    comments_ref, warnings = load_comments(
+        args.tab_id, config, comment_limit, args.comments_ref
+    )
+    resolved = resolve_refs(
+        snapshot(args.tab_id),
+        config,
+        {
+            "body": args.body_ref,
+            "image_media": args.images_ref,
+            "video_media": args.media_ref,
+        },
+    )
+    body_ref = resolved["body"]
+    images_ref = resolved["image_media"]
+    media_ref = resolved["video_media"]
+    if not body_ref:
+        raise RuntimeError("未从 locators.yaml 或 --body-ref 找到正文容器")
 
-    content = extract_text(args.tab_id, args.body_ref, 20000)
-    comments_text = extract_text(args.tab_id, args.comments_ref, 100000)
+    content = extract_text(args.tab_id, body_ref, 20000)
+    comments_text = extract_text(args.tab_id, comments_ref, 100000)
     if content["truncated"]:
         warnings.append("正文达到采集上限，可能不完整")
-    if args.comments_ref:
+    if comments_ref:
         warnings.append("评论仅包含当前 Web 页面已加载和已展开的范围")
 
     images = []
-    if args.images_ref:
+    if images_ref:
         discovered_images = deduplicate(
             chrome_agent(
                 "page",
@@ -197,7 +284,7 @@ def main() -> int:
                 "--tab-id",
                 str(args.tab_id),
                 "--ref",
-                args.images_ref,
+                images_ref,
                 "--load",
             ).get("images", [])
         )
@@ -206,9 +293,9 @@ def main() -> int:
             warnings.append("未识别出笔记原图，已拒绝下载小图/表情/页面资源")
 
     audio_video = []
-    if args.media_ref:
+    if media_ref:
         scoped_media = chrome_agent(
-            "page", "media", "--tab-id", str(args.tab_id), "--ref", args.media_ref
+            "page", "media", "--tab-id", str(args.tab_id), "--ref", media_ref
         ).get("media", [])
         page_media = chrome_agent("page", "media", "--tab-id", str(args.tab_id)).get(
             "media", []
@@ -216,9 +303,9 @@ def main() -> int:
         audio_video = deduplicate(scoped_media + page_media)
 
     downloads = []
-    if args.download_images and args.images_ref:
+    if args.download_images and images_ref:
         command = [
-            "page", "download-images", "--tab-id", str(args.tab_id), "--ref", args.images_ref,
+            "page", "download-images", "--tab-id", str(args.tab_id), "--ref", images_ref,
             "--prefix", args.prefix,
         ]
         for image in images:
@@ -235,7 +322,7 @@ def main() -> int:
                 for item in result.get("downloads", [])
                 if item.get("url")
             ]
-    if args.download_media and args.media_ref:
+    if args.download_media and media_ref:
         result = chrome_agent(
             "page",
             "download-media",
@@ -260,8 +347,8 @@ def main() -> int:
         "comments": {
             "rawText": comments_text["text"],
             "items": comment_items(comments_text["text"]),
-            "scope": "currently-loaded" if args.comments_ref else "none",
-            "possiblyIncomplete": bool(args.comments_ref),
+            "scope": "currently-loaded" if comments_ref else "none",
+            "possiblyIncomplete": bool(comments_ref),
         },
         "media": {
             "images": images,

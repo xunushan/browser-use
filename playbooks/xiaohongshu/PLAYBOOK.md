@@ -22,14 +22,14 @@ DETAIL_OPEN → BODY_READY → COMMENTS_READY
 | 目标 | 首选关系 | class 弱提示 |
 |---|---|---|
 | 搜索框 | input + 搜索语义 | `search-input` |
-| 结果卡片 | 标题/作者 + `/explore/` anchor | `note-item` |
+| 结果卡片 | 带访问上下文的 `/search_result/<id>` 可见 cover anchor | `note-item`, `cover mask` |
 | 详情 | 覆盖背景且包含正文/媒体/评论 | `note-detail-mask`, `note-container` |
 | 正文 | 详情内最窄长文本容器 | `note-text` |
 | 图片 | 详情内带页码的媒体容器 | `xhs-slider-container` |
 | 视频 | 内含 video 和播放器控制 | `video-player-media`, `player-container` |
-| 评论 | 详情交互区评论总容器 | `comments-el` |
+| 评论 | 详情交互区评论总容器 | `comments-container`（外层 `comments-el`） |
 
-class 不是固定 selector，运行时必须结合可见区域、容器关系、文字和元素类型重新判断。
+这些 class 是 `locators.yaml` 中的弱提示，不是脚本内联 selector；运行时仍须结合可见区域、容器关系、文字和元素类型重新判断。
 
 ## 小红书链接访问上下文
 
@@ -37,11 +37,20 @@ class 不是固定 selector，运行时必须结合可见区域、容器关系�
 
 ## 标准工作流
 
-1. 在搜索结果页执行 `scripts/discover.py`，得到候选结果的实时 `ref` 和完整 `href`。
-2. 智能体验证并点击其中一个结果 ref；直接导航时原样使用当前页面发现的完整 href。
+1. 在搜索结果页执行 `scripts/discover.py`，得到候选结果的实时 `ref`、`noteId`、标题和完整 `href`。
+2. 智能体用 `--open-rank` 打开候选；若已有详情遮罩，脚本先关掉它（见下）。`--open-rank` 会**核验落点**：点完轮询 URL 与详情标记（`detail.open_markers`），只有确认落在目标 `noteId` 上才返回成功；点不中时自动退回 `--open-mode navigate`，两条路都不中则报错退出，不会把上一条笔记当成本次结果。当前页不是搜索结果页时同样报错并给出实际 URL，而不是返回空候选。
 3. 详情打开后重新 snapshot，智能体识别正文、媒体、评论的最窄实时 ref。
 4. 智能体把这些 ref 传给 `scripts/collect.py`，由脚本做固定的提取、下载、去重和 JSON 输出。
 5. 返回结果页后重新 snapshot，再处理下一条；所有旧 ref 作废。
+
+### 关闭详情遮罩
+
+详情遮罩覆盖在结果页之上，遮罩开着时点击背景卡片会打空（`page click` 仍返回 `clicked: true`）。`discover.py` 按两条路依序尝试：
+
+1. `locators.yaml` 的 `detail.close_control`（`button` + `close-icon`）；
+2. `detail.dismiss_keys`（默认 `Escape`），发在 `detail.mask` / `detail.container` 上。
+
+窄版布局（实测 viewport 600×740）下小红书把关闭按钮设为 `display:none`，所以第 1 条路不通、实际生效的是 Escape。两条都不通时脚本报错中止，而不是继续点遮罩。
 
 ## 脚本入口：何时使用、如何使用
 
@@ -49,8 +58,8 @@ class 不是固定 selector，运行时必须结合可见区域、容器关系�
 
 | 脚本 | 使用时机 | 输入 | 输出 | 不负责的事 |
 |---|---|---|---|---|
-| `scripts/discover.py` | 已完成搜索、当前处于结果页时 | `tab-id`、候选数量 | `/explore/` 候选的 rank、ref、href | 不点击、不打开详情、不保证裸 href 可访问 |
-| `scripts/collect.py` | 已打开一条详情，且智能体刚从 snapshot 找到正文/评论/媒体 ref 时 | `tab-id` 和实时 ref，选择是否下载图片/视频 | 单条笔记 JSON、下载状态、文件名 | 不搜索、不猜 ref、不绕过 App-only/验证码/登录 |
+| `scripts/discover.py` | 已完成搜索、当前处于结果页时 | `tab-id`、候选数量；`--open-rank` 可顺带打开 | `/search_result/` 候选的 rank、ref、title、noteId、href；打开时返回核验过的 `noteId` 与所用 `mode` | 默认不打开详情；不保证裸 href 可访问 |
+| `scripts/collect.py` | 已打开一条详情时 | `tab-id`、选择是否下载图片/视频；ref 可作为回退参数 | 单条笔记 JSON、下载状态、文件名 | 不搜索、不绕过 App-only/验证码/登录 |
 
 ### 1. 结果页：发现候选笔记
 
@@ -60,23 +69,29 @@ class 不是固定 selector，运行时必须结合可见区域、容器关系�
 python playbooks/xiaohongshu/scripts/discover.py --tab-id <search-tab-id> --limit 10
 ```
 
-脚本仅把 full snapshot 中的候选 anchor 结构化输出。智能体应优先用返回的 `ref` 点击；如果结果里 `hasAccessContext=false`，不能把裸 href 当成永久可访问链接，仍应优先点击页面元素并观察详情是否成功打开。
+候选由 `locators.yaml` 的 `search.result_link` 规则筛选：必须是可见、有尺寸、带 `xsec_token` 的 `/search_result/` 卡片链接。标题优先由同 href 的 title anchor 关联，缺失时才取包含卡片文本。打开第一条的推荐方式：
+
+```bash
+python playbooks/xiaohongshu/scripts/discover.py \
+  --tab-id <search-tab-id> --limit 10 --open-rank 1
+```
+
+若点击被页面改版阻断，才显式改用 `--open-mode navigate`；该模式仍只使用这次 discovery 输出的完整 href。
 
 ### 2. 详情页：收集一条笔记
 
-智能体打开详情后，先执行 `chrome-agent page snapshot --scope full`，找到 `body-ref`，以及按笔记类型选择图片轮播的 `images-ref` 或视频播放器的 `media-ref`；需要评论时同时提供 `comments-ref`。随后运行：
+智能体打开详情后，`collect.py` 会从**当次** snapshot 按 `locators.yaml` 解析正文、图片/视频和评论容器。评论未挂载时，它按 `scroll.comments` 的步长滚动 `note-scroller`，直到 `stop_when` 里的规则命中（默认 `moved_false` 或 `no_progress`），再解析已挂载的评论。命令行 ref 仅用于规则暂时失配时的回退。随后运行：
 
 ```bash
 python playbooks/xiaohongshu/scripts/collect.py \
   --tab-id <detail-tab-id> \
-  --body-ref <note-text-ref> \
-  --comments-ref <comments-ref> \
   --images-ref <slider-ref> \
-  --comment-scrolls 3 \
   --download-images \
   --prefix <note-id> \
   --output-dir outputs/xiaohongshu/<note-id>
 ```
+
+`--comment-scrolls N` 是**最多滚动步数的上限**，不是「滚 N 次」：不传时用 `locators.yaml` 的 `scroll.comments.max_steps`。它应该只在需要主动收紧上限时使用；正常情况下不要传，交给配置决定。
 
 视频笔记将 `--images-ref ... --download-images` 换成 `--media-ref <player-ref> --download-media`。图文和视频都可以保留评论参数。`--output-dir` 会生成统一的笔记目录：`note.json` 放正文、评论和下载记录，图片放 `images/`，视频放 `videos/`。脚本会只下载已发现且符合笔记原图特征的 URL；`downloads` 中必须逐项为 `state=complete` 才算下载成功。
 
@@ -86,13 +101,15 @@ python playbooks/xiaohongshu/scripts/collect.py \
 
 ## 正文与评论
 
-```bash
-chrome-agent page text --tab-id <id> --ref <body-ref> --max-chars 20000 --json
-chrome-agent page scroll --tab-id <id> --ref <comments-ref> --dy 700 --json
-chrome-agent page text --tab-id <id> --ref <comments-ref> --max-chars 100000 --json
-```
+正文使用 `page text --ref <body-ref>`；评论的定位与滚动由 `collect.py` 读取 `locators.yaml` 后完成，智能体不应再写死评论容器 ref 或滚动距离。
 
-评论仅代表 Web 页面当前滚动/展开后已加载的内容。`note.json` 的 `comments.items` 是 `{author, text}` 记录；时间/地区、点赞、回复按钮、回复展开提示和作者徽标等 UI 元数据不会写入每条评论，完整页面原始文本保留在 `comments.rawText`。需要更多评论时，智能体先点击“展开 N 条回复”，滚动评论容器直到无新增或达到任务限制，再解析新 ref。
+评论仅代表 Web 页面当前滚动/展开后已加载的内容。`note.json` 的 `comments.items` 是 `{author, text}` 记录；时间/地区、点赞、回复按钮、回复展开提示和作者徽标等 UI 元数据不会写入每条评论，完整页面原始文本保留在 `comments.rawText`。需要更多折叠回复时，智能体先点击“展开 N 条回复”，再重新执行采集。
+
+`scroll.comments.stop_when` 支持 `moved_false`（CLI 报告无法继续移动）、`no_progress`（位置与最大滚动量较上一步没变）、`at_max`（已到 `maxScrollY`），按顺序取第一个命中的规则结束循环。达到 `max_steps` 仍未终止时，`note.json` 会带一条「滚动达到上限」的 warning。
+
+## `locators.yaml`：页面规则与脚本边界
+
+`locators.yaml` 是本站 Playbook 的页面语义配置：结果链接路径与访问上下文、卡片标题关联、详情关闭控件与 `dismiss_keys`、正文/媒体/评论容器，以及评论滚动步长/上限/`stop_when` 均在此维护。`discover.py` 和 `collect.py` 只读取配置、在**当次** snapshot 中解析 ref、调用通用 CLI；不得把站点路径、class 关键词或滚动终止规则重新写回脚本。
 
 ## 图片与视频
 
@@ -120,6 +137,8 @@ chrome-agent page download-media --tab-id <id> --ref <player-ref> --prefix <note
 
 - ref 失效：重新 full snapshot；URL 过期：重新发现媒体；
 - App-only/风控：记录并跳过，不绕过；
+- 遮罩关不掉（`close_control` 不可见且 `dismiss_keys` 无效）：`discover.py` 报错中止，此时应原样重新导航到搜索页 URL，不要带着遮罩继续点卡片；
+- `--open-rank` 报「没有落在目标笔记」：说明 click 和 navigate 都没能把页面带到目标，不要沿用当前页面继续采集；
 - 评论回复展开和虚拟轮播仍由智能体根据实时 DOM 编排；
 - 首页 Top 由网站当次排序决定，不假设固定结果。
 
