@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Set up Chrome Agent on this machine: the runtime, the Native Messaging host,
-# the copy of the extension Chrome loads, and the skill link that makes this
-# directory an agent skill.
+# the copy of the extension Chrome loads, and the manual in the agent's skill
+# directory.
 #
-# Run from the checkout, which is also the skill: `chrome_agent/` and
-# `extension/` sit next to this script, so once the directory is linked into an
-# agent's skill directory, the agent that reads SKILL.md can run this itself.
+# Run from the checkout. The runtime is installed out of it into an install home
+# of its own, and the manual is copied into the skill directory — the skill
+# directory holds the manual and nothing else, so an agent reading it finds a
+# description of the tool rather than the tool.
 #
 # Chrome has no silent way to load an extension, so the user loads it once by
 # hand at chrome://extensions. Everything after that is this script's job: it
-# copies the extension out of the skill directory to a fixed path an update
-# cannot move, and when that copy has changed since the extension last loaded
+# copies the extension out of the checkout to a fixed path an update cannot
+# move, and when that copy has changed since the extension last loaded
 # it, it has the extension reload itself. Re-running this script therefore asks
 # nothing of the user, and it looks before it tells: a machine that is already
 # set up is left alone.
@@ -26,13 +27,13 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUNTIME_DIR="${CHROME_AGENT_HOME:-$HOME/chrome-agent}"
 VENV_DIR="${CHROME_AGENT_VENV:-$RUNTIME_DIR/venv}"
 BIN_DIR="${CHROME_AGENT_BIN_DIR:-$HOME/.local/bin}"
-SKILL_DIRS_DEFAULT="$HOME/.claude/skills $HOME/.codex/skills"
+SKILL_DIRS_DEFAULT="$HOME/.claude/skills"
 
-# Chrome loads the extension from a fixed path rather than from the skill
-# directory: an update replaces the skill directory, and Chrome remembers the
-# path it loaded from, so an extension loaded out of the skill would stop
-# working the next time the skill was updated. The copy below is the one Chrome
-# points at; this script keeps it in step with the source.
+# Chrome loads the extension from a fixed path rather than from the checkout:
+# the checkout is a build input, and Chrome remembers the path it loaded from,
+# so an extension loaded out of it would stop working the moment that directory
+# moved or was deleted. The copy below is the one Chrome points at; this script
+# keeps it in step with the source.
 EXTENSION_SOURCE="$SOURCE_DIR/extension"
 EXTENSION_DIR="$RUNTIME_DIR/extension"
 
@@ -49,7 +50,7 @@ Usage: ./setup.sh [options]
   --extension-id <id>    use this 32-character ID for the Native Messaging host
                          instead of the one the manifest key pins
   --skill-dirs "<dirs>"  space-separated skill directories, default
-                         "~/.claude/skills ~/.codex/skills"
+                         "~/.claude/skills"
   --force                replace skill directories this script did not create
   --uninstall            remove the host manifest, launcher, skill links and CLI
   --purge                with --uninstall, also delete the virtualenv and the
@@ -113,9 +114,27 @@ if ((UNINSTALL)); then
   fi
   for SKILL_DIR in "${SKILL_DIRS[@]}"; do
     TARGET="$SKILL_DIR/$SKILL_NAME"
-    # Only links are ours to remove: a real directory here was put there by
-    # someone who did not use this script.
-    if [[ -L "$TARGET" ]]; then
+    # The manual this script wrote is this script's to remove. Anything else at
+    # that path belongs to whoever put it there, and the helper says so rather
+    # than deleting it — a skill directory is small enough that removing the
+    # wrong one looks like a success.
+    if [[ -x "$VENV_DIR/bin/python" ]]; then
+      "$VENV_DIR/bin/python" - "$TARGET" <<'PY' || true
+import sys
+from pathlib import Path
+
+from chrome_agent.utils.skill_sync import remove_skill
+
+try:
+    removed = remove_skill(Path(sys.argv[1]))
+except FileExistsError as error:
+    print(f"  left alone: {error}", file=sys.stderr)
+else:
+    if removed:
+        print(f"  removed {sys.argv[1]}")
+PY
+    elif [[ -L "$TARGET" ]]; then
+      # No runtime to ask, so only the case that needs no judgement.
       rm -f "$TARGET"
     fi
   done
@@ -152,9 +171,13 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-# Editable: the skill is the checkout, so an edit in the tree must take effect
-# without reinstalling. --reinstall because the wheel is built from this tree.
-"$UV" pip install --quiet --python "$VENV_PYTHON" --reinstall -e "$SOURCE_DIR"
+# A real install, not editable. The runtime belongs in the install home, where
+# nothing about the checkout can move it: `chrome-agent` is the tool, and the
+# skill directory describes the tool rather than being it. The price is that an
+# edit in the tree reaches this machine only when this script runs again — which
+# is also the run that copies the manual out, so the two stay in step.
+# --reinstall because the wheel is built from this tree.
+"$UV" pip install --quiet --python "$VENV_PYTHON" --reinstall "$SOURCE_DIR"
 
 # ------------------------------------------------------------- the extension
 
@@ -224,31 +247,37 @@ PY
 
 # ----------------------------------------------------------------- the skill
 
-for SKILL_DIR in "${SKILL_DIRS[@]}"; do
-  mkdir -p "$SKILL_DIR"
-  TARGET="$SKILL_DIR/$SKILL_NAME"
-  # Already this skill, in this very place: nothing to link. That is the normal
-  # case when the skill was installed by unpacking it into the skill directory
-  # and this script is then run from inside that installation. It must not fall
-  # through to the replacement below, which would delete the running copy and
-  # leave a symlink pointing at itself.
-  #
-  # -ef compares the files themselves, so it holds however the paths are spelt.
-  if [[ -e "$TARGET" && "$TARGET" -ef "$SOURCE_DIR" ]]; then
-    echo "skill already in place at $TARGET"
-    continue
-  fi
-  if [[ -L "$TARGET" ]]; then
-    rm -f "$TARGET"
-  elif [[ -e "$TARGET" ]]; then
-    if grep -q "^name: $SKILL_NAME$" "$TARGET/SKILL.md" 2>/dev/null || ((FORCE)); then
-      rm -rf "$TARGET"
-    else
-      die "Refusing to replace $TARGET: it is not a $SKILL_NAME skill. Use --force."
-    fi
-  fi
-  ln -s "$SOURCE_DIR" "$TARGET"
-done
+# The skill directory is the manual — SKILL.md and the references — and nothing
+# else. It is copied rather than linked, so that an agent opening it finds a
+# description of the tool instead of a second copy of the project. The copy is
+# also what makes the checkout's location stop mattering; the price is that an
+# edit here reaches the agent only when this script runs again.
+#
+# sync_skill refuses to replace a directory that is not this skill, and does
+# nothing at all when the checkout is itself the skill directory — that case
+# would delete the runtime to make room for four files.
+
+SKILL_REPORT="$("$VENV_PYTHON" - "$SOURCE_DIR" "$FORCE" "${SKILL_DIRS[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+from chrome_agent.utils.skill_sync import SKILL_NAME, sync_skill
+
+source, force, *dirs = sys.argv[1:]
+force = force == "1"
+
+for directory in dirs:
+    target = Path(directory) / SKILL_NAME
+    try:
+        written = sync_skill(source, target, force=force)
+    except FileExistsError as error:
+        sys.exit(f"setup.sh: {error}")
+    if written:
+        print(f"  manual        {target}")
+    else:
+        print(f"  manual        {target} (left alone: the checkout is already here)")
+PY
+)"
 
 VERSION="$("$VENV_PYTHON" -c 'import chrome_agent; print(chrome_agent.__version__)')"
 
@@ -334,7 +363,8 @@ echo "  extension ID  $EXTENSION_ID"
 echo "  extension     $EXTENSION_DIR"
 echo "  launcher      $LAUNCHER"
 echo "  host manifest $HOST_DIR/$HOST_NAME.json"
-echo "  skill         ${SKILL_DIRS[*]}"
+echo "  skill dirs    ${SKILL_DIRS[*]}"
+printf '%s\n' "$SKILL_REPORT"
 echo
 
 if [[ "$CHROME_RUNNING" != "True" ]]; then

@@ -1,9 +1,9 @@
-"""Keeping the copy Chrome loads in step with the copy in the skill.
+"""Keeping the copy Chrome loads in step with the source in the checkout.
 
 Chrome remembers the directory an unpacked extension was loaded from, so the
-copy it points at must survive an update that replaces the skill directory. These
-tests cover the two things that make that safe: the copy is a faithful mirror,
-and what landed can be compared against what the extension last confirmed.
+copy it points at must survive a checkout that moves. These tests cover the two
+things that make that safe: the copy is a faithful mirror, and what landed can
+be compared against what the extension last confirmed.
 """
 
 import json

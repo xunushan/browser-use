@@ -1,28 +1,34 @@
 # 安装与配置
 
 只有在 `chrome-agent` 命令不存在、或扩展连不上时才读本文件。装好之后不用再管它——
-**重装或更新这个 skill 不需要重新装扩展**，见下面第 3 步。
+**重装或更新 skill 不需要重新装扩展**，见下面第 3 步。
 
 ## 这套东西由什么组成
 
-这个 skill 目录**就是**全部：说明书（`SKILL.md`）、运行时（`chrome_agent/`）、
-Chrome 扩展（`extension/`）、配置脚本（`setup.sh`）。没有别的包要下载。
+`chrome-agent` 是一个**工具**，装在自己的安装目录 `~/chrome-agent/` 下。技能目录里只有
+**说明书**——`SKILL.md` 和 `references/`。两者是分开的：读说明书不该依赖找到源代码。
 
-装好之后各部分落在哪：
+一次安装把这几样东西放到它们该在的地方：
 
 | 东西 | 位置 |
 |---|---|
-| 运行时 | skill 目录，`uv` 装进 `~/chrome-agent/venv`（可用 `CHROME_AGENT_VENV` 改） |
-| 扩展源码 | skill 目录里的 `extension/`，只作来源，Chrome 不加载它 |
-| **Chrome 加载的扩展** | `~/chrome-agent/extension` —— `setup.sh` 每次从上一行同步过来 |
+| 运行时 | `~/chrome-agent/venv`（`uv` 装进去，可用 `CHROME_AGENT_VENV` 改） |
+| Chrome 加载的扩展 | `~/chrome-agent/extension`，由 `setup.sh` 从仓库的 `extension/` 同步 |
 | Native Messaging host 清单 | macOS：`~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.browseruse.chrome_agent.json`；Linux：`~/.config/google-chrome/NativeMessagingHosts/com.browseruse.chrome_agent.json` |
 | Chrome 执行的入口 | `~/chrome-agent/launcher.sh`（由 `setup.sh` 生成，绝对路径写死） |
 | CLI | `~/.local/bin/chrome-agent` → venv 里的同名命令 |
-| 安装记录 | `~/chrome-agent/install.json`（版本、扩展 ID、skill 位置、上次确认加载的扩展内容哈希） |
+| **说明书** | `~/.claude/skills/chrome-agent/`，其中只有 `SKILL.md` 与 `references/` |
+| 安装记录 | `~/chrome-agent/install.json` |
 
-扩展单独放一份、而不是就地加载 skill 目录里的 `extension/`，是因为 Chrome 记住的是
-它加载时那个**目录路径**：skill 一更新，skill 目录整个被替换，就地加载的扩展就会连同
-路径一起失效。放在 `~/chrome-agent/extension` 之后，更新动不到它。
+**运行时是正式安装，不是 editable。** 装完仓库可以删掉，`chrome-agent` 照常工作。代价是
+改了仓库里的代码要重跑 `setup.sh` 才生效——说明书也是同一次跑同步过去的，两者不会脱节。
+
+技能目录是**拷贝**而不是软链，道理一样：那里是给智能体读的说明书，不该同时又是一个项目
+的副本。代价相同：改了 `SKILL.md` 或 `references/` 要重跑 `setup.sh`，智能体才读得到新的。
+
+扩展单独放一份、而不是就地加载仓库里的 `extension/`，是因为 Chrome 记住的是它加载时那个
+**目录路径**：仓库一旦被移动或删掉，就地加载的扩展就会失效。放在 `~/chrome-agent/extension`
+之后，更新动不到它。
 
 安装目录叫 `~/chrome-agent` 而不是 `~/.chrome-agent`，是为了上面第 3 步那一次人工选择：
 **macOS 的文件选择框不列出点开头的目录**，"加载已解压的扩展程序"的选文件夹面板里根本
@@ -53,38 +59,42 @@ Chrome for Developers《Native messaging》的用户级目录表与 Chromium 的
 
 ## 步骤
 
-### 1. 把 skill 解到智能体读技能的地方
+### 1. 拿到仓库
 
-本目录就是 skill，放到技能目录即完成"安装 skill"这一步——`SKILL.md` 在这里，
-`chrome_agent/` 和 `extension/` 也在同一层，脚本不用去别处找东西。
+`setup.sh` 从仓库里读源码、扩展和说明书，所以先要有仓库。**放哪都行**——装完它就不重要了。
 
-仓库的归档已经剔除了开发用的 `tests/`、`docs/`（`.gitattributes` 里的 `export-ignore`），
-所以下载下来就是最小可运行集：
+要改这个工具，`git clone`：
 
 ```bash
-rm -rf ~/.claude/skills/chrome-agent
-mkdir -p ~/.claude/skills/chrome-agent
+git clone https://github.com/xunushan/chrome-agent.git ~/projects/chrome_agent
+```
+
+只想用，下载归档（已剔除开发用的 `tests/`、`docs/`，见 `.gitattributes` 的 `export-ignore`）：
+
+```bash
+mkdir -p /tmp/chrome-agent && cd /tmp/chrome-agent
 curl -fsSL https://github.com/xunushan/chrome-agent/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=1 -C ~/.claude/skills/chrome-agent
+  | tar -xz --strip-components=1
 ```
 
-要改这个 skill 而不只是用它，就换成 `git clone`（或把已有 checkout 软链过去，改动立即
-生效），代价是多带 `tests/` 与 `docs/`：
-
-```bash
-git clone https://github.com/xunushan/chrome-agent.git ~/.claude/skills/chrome-agent
-```
+**不要把仓库解到 `~/.claude/skills/chrome-agent`。** 那里是技能目录，`setup.sh` 要往里写
+说明书；仓库若放在那儿，它会发现自己要覆盖的正是自己的源码目录，于是**停手不动**。这是
+防误删的守卫（否则会把 `chrome_agent/`、`extension/`、`setup.sh` 删掉给四个文件腾地方），
+不是故障。
 
 ### 2. 运行 setup.sh
 
 ```bash
-<skill 目录>/setup.sh
+<仓库目录>/setup.sh
 ```
 
-它做五件事：用 `uv` 建 venv 并从本目录可编辑安装运行时；按 `extension/manifest.json`
-里的 `key` 算出扩展 ID（换机器也不变）；把 `extension/` 同步到 `~/chrome-agent/extension`；
-写 Native Messaging host 清单与 launcher；把本目录软链到 `~/.claude/skills/chrome-agent`
-和 `~/.codex/skills/chrome-agent`（`--skill-dirs` 可改）。
+它做六件事：用 `uv` 建 venv 并**正式安装**运行时；按 `extension/manifest.json` 里的 `key`
+算出扩展 ID（换机器也不变）；把 `extension/` 同步到 `~/chrome-agent/extension`；写 Native
+Messaging host 清单与 launcher；把 `chrome-agent` 链到 `~/.local/bin`；把 `SKILL.md` 与
+`references/` 拷进 `~/.claude/skills/chrome-agent`。
+
+最后一件会把技能目录**换成一个真实目录**。早先版本在这里放的是指向仓库的软链，这次运行
+会把它换成只装说明书的目录——**仓库本身不受影响，代码一个字节都不会删**。
 
 它结尾会自己判断扩展那一摊该不该动**再**说话，所以打印出来的就是当前该做的事。
 
@@ -147,8 +157,11 @@ chrome-agent ensure --launch-if-missing --wait-for-extension --timeout 30 --json
 | `ensure` 报 `"extension": false` 但扩展已加载 | 卡片上的 ID 与 host 清单里的不一致——多半加载的不是 `~/chrome-agent/extension`，或清单被改过。删掉重新加载，核对 ID |
 | Chrome 更新/重启后扩展显示"已停用"或报错 | 先确认开发者模式还开着；再在 `chrome://extensions` 上重新加载扩展。host 清单不用动 |
 | 更新 skill 后扩展还在跑旧代码 | `chrome-agent extension status --json` 报 `"reloadNeeded": true` 时跑 `chrome-agent extension reload`；`setup.sh` 平时会自动做掉这一步 |
+| 改了仓库里的代码或说明书，机器上没变 | 两者都要重跑 `setup.sh` 才会生效——运行时是正式安装，说明书是拷贝 |
 | 刚重载完，页面里某个命令没生效 | 扩展重载不影响已打开的页面；刷新该页再试 |
 | 更新后扩展跑的还是 `~/.chrome-agent/extension` 那份 | 安装目录已改到 `~/chrome-agent`，旧路径不再同步。在 `chrome://extensions` 上删掉那张卡，改从 `~/chrome-agent/extension` 加载 |
+| `setup.sh` 说技能目录"left alone: the checkout is already here" | 仓库被放在了技能目录里。把它挪到别处再跑 |
+| `setup.sh` 拒绝覆盖技能目录 | 那里是别人的技能，不是本工具写的。确认后加 `--force` |
 | `command not found: chrome-agent` | `~/.local/bin` 不在 PATH，或 `setup.sh` 没跑完 |
 | `command not found: uv` | 先按上面的命令装 uv，再重跑 `setup.sh` |
 | 想换扩展 ID | 正常情况下不要：清单里的 `key` 已经把 ID 固定了。确要覆盖时用 `setup.sh --extension-id <id>` |
@@ -156,9 +169,10 @@ chrome-agent ensure --launch-if-missing --wait-for-extension --timeout 30 --json
 ## 卸载
 
 ```bash
-<skill 目录>/setup.sh --uninstall          # 加 --purge 连 venv 和扩展副本一起删
+<仓库目录>/setup.sh --uninstall          # 加 --purge 连 venv 和扩展副本一起删
 ```
 
-扩展本身在 `chrome://extensions` 上移除。`--uninstall` 只删本脚本创建的软链，不会删
-真正的 skill 目录；`~/chrome-agent/extension` 也留着，因为已加载的扩展正指着它——扩展
-移除后再删，或者用 `--purge`。
+扩展本身在 `chrome://extensions` 上移除。`--uninstall` 删掉 host 清单、launcher、
+`~/.local/bin/chrome-agent`，以及技能目录里**它自己写的那份说明书**——若那目录不是本工具
+写的，它会拒绝并说明，不会动别人的东西。`~/chrome-agent/extension` 也留着，因为已加载的
+扩展正指着它——扩展移除后再删，或者用 `--purge`。

@@ -2,10 +2,11 @@
 
 Chrome remembers the directory an unpacked extension was loaded from, and if
 that directory disappears the extension stops working and has to be loaded again
-by hand. The skill directory is replaced on every update, so the copy Chrome
-loads lives in the install home instead, and setup keeps the two in step:
+by hand. The checkout is where the extension is written, not where it is loaded
+from, so the copy Chrome loads lives in the install home instead, and setup
+keeps the two in step:
 
-    <skill>/extension  --sync_extension()-->  ~/chrome-agent/extension
+    <checkout>/extension  --sync_extension()-->  ~/chrome-agent/extension
 
 The hash of what was written is recorded in install.json, and it is recorded
 only once the extension confirms it reloaded: a hash written on the strength of

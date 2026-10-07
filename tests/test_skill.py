@@ -1,15 +1,19 @@
-"""The skill is this repository, and it is generic.
+"""The manual is generic, and it is the whole of what a skill directory holds.
 
-The skill ships the whole tool — runtime, extension, install script — so that an
-agent that finds it needs nothing else. What it must not ship is site knowledge:
-a website's containers, selectors and measurements belong to that website's own
-skill, which drives this one through the CLI. The marker scan below is how that
-stays true, and it covers the code as well as the prose: the manifest is the one
-place a site could be named and silently authorized.
+`setup.sh` writes SKILL.md and the references into the agent's skill directory
+and nothing else — see `chrome_agent/utils/skill_sync.py` — so what an agent
+finds there describes the tool instead of being the tool. What the manual must
+never carry is site knowledge: a website's containers, selectors and
+measurements belong to that website's own skill, which drives this one through
+the CLI. The marker scan below is how that stays true, and it covers the code as
+well as the prose: the manifest is the one place a site could be named and
+silently authorized.
 
 The surface block is the other half of that contract, in the other direction: it
 is what an agent copies into a shell, so every name in it has to be a command the
 CLI answers to. One test here reads the block and asks the CLI.
+
+These tests read the checkout, which is where the manual is written.
 """
 
 import os
@@ -19,15 +23,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from chrome_agent.utils.skill_sync import REFERENCE_NAMES
+
 SKILL_DIR = Path(__file__).parent.parent
 SKILL = SKILL_DIR / "SKILL.md"
 
-REFERENCES = [
-    "install-and-setup.md",
-    "site-exploration-and-playbook-spec.md",
-    "media-and-downloads.md",
-    "troubleshooting.md",
-]
+# The same list `setup.sh` copies, so the two cannot drift apart.
+REFERENCES = list(REFERENCE_NAMES)
 
 # A site name, one site's class names, or an observation measured on a single
 # site appearing in the generic part of the skill means something was filed in
@@ -54,14 +56,16 @@ def generic_files() -> list[Path]:
     return [path for path in files if path.is_file()]
 
 
-def test_the_skill_ships_the_whole_tool():
-    """Install = put this directory where the agent keeps skills, and nothing else.
+def test_every_reference_written_here_is_one_the_skill_ships():
+    """The copy list is written out, so a new reference has to be added to it.
 
-    If the runtime or the extension lived outside the skill, installing would
-    mean assembling pieces from two places again.
+    Globbing would ship a file nobody was told to read; a list with a stale entry
+    would leave a link in the manual pointing at nothing. Both are caught here,
+    against the checkout the copy is taken from.
     """
-    for relative in ("chrome_agent", "extension/manifest.json", "setup.sh"):
-        assert (SKILL_DIR / relative).exists(), relative
+    written = sorted(path.name for path in (SKILL_DIR / "references").glob("*.md"))
+
+    assert written == sorted(REFERENCES)
 
 
 def test_project_skill_exposes_generic_browser_workflow():

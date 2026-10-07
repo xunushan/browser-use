@@ -56,9 +56,11 @@ def get_home_dir() -> Path:
     """Get the install home, which setup.sh calls $CHROME_AGENT_HOME.
 
     The virtualenv, the launcher, install.json and the copy of the extension
-    Chrome loads all live here rather than in the skill directory: the skill is
-    replaced on every update, and Chrome remembers the path it loaded the
-    extension from, so that path has to outlive an update.
+    Chrome loads all live here rather than in the checkout: the checkout is what
+    the runtime is built from, not where it runs, so it may be moved or deleted
+    once setup.sh has run. The extension copy has a reason of its own — Chrome
+    remembers the path it loaded the extension from, and that path has to
+    outlive an update.
 
     Deliberately not a dot directory. The one step of the install that needs a
     person is picking this folder in Chrome's "Load unpacked" dialog, and macOS

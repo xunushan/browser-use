@@ -6,8 +6,8 @@ description: Install and control the user's existing signed-in Google Chrome thr
 # Chrome Agent
 
 Drive the user's own signed-in Chrome through the local `chrome-agent` CLI. This
-skill is both the installer and the tool manual, and it is generic on purpose:
-what to collect from a given website belongs to that website's own skill.
+skill is the tool's manual, and it is generic on purpose: what to collect from a
+given website belongs to that website's own skill.
 
 ## Read on demand
 
@@ -28,15 +28,15 @@ command -v chrome-agent >/dev/null || echo "not installed"
 chrome-agent extension status --json   # connected: true means ready
 ```
 
-If the command is missing, this skill is not installed. This directory *is* the
-skill: `chrome_agent/`, `extension/`, `setup.sh`. Read
-[references/install-and-setup.md](references/install-and-setup.md) and follow it
-end to end — the click at `chrome://extensions` is the one step a machine cannot
-do, and it is needed once per browser profile.
+If the command is missing, the tool is not installed. This file describes
+`chrome-agent` rather than containing it; `setup.sh` in its checkout installs it.
+Read [references/install-and-setup.md](references/install-and-setup.md) and follow
+it end to end — the click at `chrome://extensions` is the one step a machine
+cannot do, and it is needed once per browser profile.
 
-If it exists, install nothing. An update replaces the skill directory, and the
-extension does not live there, so no update and no reinstall needs the extension
-loaded again. Only `connected: false` is worth acting on.
+If it exists, install nothing. The extension does not live in a skill directory,
+so no update and no reinstall needs the extension loaded again. Only
+`connected: false` is worth acting on.
 
 ## 1. Start and authorize
 

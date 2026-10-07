@@ -58,26 +58,29 @@ V1 采用 **DOM 优先** 策略：智能体通过稳定的元素引用（ref）�
 前置：macOS 或 Linux（Windows 未验证）、已安装 Google Chrome、[`uv`](https://docs.astral.sh/uv/)
 （没有就 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。
 
-### 步骤 1：把 skill 解到技能目录
+### 步骤 1：拿到仓库
 
-**仓库就是 skill**。归档里已经剔除了开发用的 `tests/` 与 `docs/`（`.gitattributes` 的
-`export-ignore`）：
+`setup.sh` 从仓库里读源码、扩展和说明书。**放哪都行**，装完它就不重要了。归档已剔除开发
+用的 `tests/` 与 `docs/`（`.gitattributes` 的 `export-ignore`）：
 
 ```bash
-rm -rf ~/.claude/skills/chrome-agent
-mkdir -p ~/.claude/skills/chrome-agent
+mkdir -p /tmp/chrome-agent && cd /tmp/chrome-agent
 curl -fsSL https://github.com/xunushan/chrome-agent/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=1 -C ~/.claude/skills/chrome-agent
+  | tar -xz --strip-components=1
 ```
+
+要改这个工具而不是只用它，换成
+`git clone https://github.com/xunushan/chrome-agent.git <目录>`。
 
 ### 步骤 2：运行 setup.sh
 
 ```bash
-~/.claude/skills/chrome-agent/setup.sh
+<仓库目录>/setup.sh
 ```
 
-它一次备好运行环境（`~/chrome-agent/venv`）、Native Messaging Host、扩展 ID、扩展副本
-（`~/chrome-agent/extension`）和 `chrome-agent` 命令。这一步不需要人工。
+它一次备好：运行环境（`~/chrome-agent/venv`，正式安装）、Native Messaging Host、扩展 ID、
+扩展副本（`~/chrome-agent/extension`）、`chrome-agent` 命令，以及技能目录里的说明书
+（`~/.claude/skills/chrome-agent/`，其中只有 `SKILL.md` 与 `references/`）。这一步不需要人工。
 
 ### 步骤 3：按 setup.sh 的结尾输出决定下一步
 
@@ -103,8 +106,13 @@ curl -fsSL https://github.com/xunushan/chrome-agent/archive/refs/heads/main.tar.
 - 开发者模式必须一直开着：Chrome 133 起，关掉即禁用未打包扩展。
 - 步骤 4 选的是 `~/chrome-agent/extension` 这个文件夹本身；选成它的父目录会报"清单文件缺失或不可读取"。
 - 扩展 ID 由清单里的 `key` 固定，不需要手动抄写或核对。
-- **更新 skill 时不要重做步骤 4**：扩展加载自 `~/chrome-agent/extension`，不在 skill 目录里，
+- **更新 skill 时不要重做步骤 4**：扩展加载自 `~/chrome-agent/extension`，不在技能目录里，
   `setup.sh` 会把新文件同步过去，并让扩展自己重载。
+- **不要把仓库解到 `~/.claude/skills/chrome-agent`**：那是技能目录，`setup.sh` 要往里写说明书，
+  发现目标就是自己的源码目录时会停手不动（防止把 `chrome_agent/`、`extension/`、`setup.sh`
+  删掉给四个文件腾地方）。
+- **改了仓库里的代码或说明书，这台机器上不会自动变**：运行时是正式安装、说明书是拷贝，
+  都要重跑 `setup.sh` 才生效。
 
 ### 验证流程
 
@@ -170,10 +178,10 @@ chrome-agent page snapshot --tab-id 123 --scope full --json
 | 操作成功但页面未变化 | 定位错误或网站事件机制 | 读取新快照，重新选择语义明确的元素 |
 | 页面要求登录或验证码 | 人工交接 | 用户在 Chrome 中完成后再继续 |
 
-想改这个 skill 而不是只用它，就把仓库 `git clone` 到技能目录（`setup.sh` 会把它软链过去，
-改动立即生效）；区别只是多带了 `tests/` 与 `docs/`。卸载用 `setup.sh --uninstall`（加
-`--purge` 连虚拟环境和扩展副本一起删），扩展在 `chrome://extensions` 上移除。完整说明
-（各文件落在哪、装不上怎么查）见 [`references/install-and-setup.md`](references/install-and-setup.md)。
+想改这个工具而不是只用它，就把仓库 `git clone` 到任意目录再跑 `setup.sh`；改了代码或说明书
+都要重跑一次才在本机生效。卸载用 `setup.sh --uninstall`（加 `--purge` 连虚拟环境和扩展副本
+一起删），扩展在 `chrome://extensions` 上移除。完整说明（各文件落在哪、装不上怎么查）见
+[`references/install-and-setup.md`](references/install-and-setup.md)。
 
 ---
 
@@ -274,19 +282,23 @@ chrome-agent page download-media --tab-id <tab-id> --ref <media-ref> --prefix no
 
 ## chrome-agent Skill
 
-**这个仓库就是 skill**：把它放到技能目录，智能体就能读懂该装什么、怎么装、怎么用。
-所以运行时代码和扩展都在这里，不在别处——
+`chrome-agent` 是工具，skill 是它的说明书。`setup.sh` 把 [`SKILL.md`](SKILL.md) 与
+[`references/`](references/) 拷进 `~/.claude/skills/chrome-agent/`，**那个目录里只有说明书**
+——智能体读到的是怎么用这个工具，而不是这个项目本身。
 
-- [`SKILL.md`](SKILL.md)：说明书。启动、操作循环、命令面、接口契约、安全交接，不含任何站点内容。
+工具这边：
+
+- [`SKILL.md`](SKILL.md)：说明书。安装、操作循环、命令面、接口契约、安全交接，不含任何站点内容。
 - [`references/`](references/)：按需加载的细则——[安装与配置](references/install-and-setup.md)、
   [站点 skill 规范](references/site-exploration-and-playbook-spec.md)、
   [媒体与下载](references/media-and-downloads.md)、[排错](references/troubleshooting.md)。
-- [`setup.sh`](setup.sh)：配置与同步（uv 建环境、写 host 清单、把扩展同步到 `~/chrome-agent/extension`、链好 skill）；再跑一次不打扰用户，该热重载时自己热重载。
+- [`setup.sh`](setup.sh)：安装与同步（uv 建环境并正式安装运行时、写 host 清单、把扩展同步到
+  `~/chrome-agent/extension`、链好 `chrome-agent` 命令、把说明书拷进技能目录）；再跑一次不
+  打扰用户，该热重载时自己热重载。
 - [`chrome_agent/`](chrome_agent/)：运行时；[`extension/`](extension/)：Chrome 扩展的源码，
   实际被 Chrome 加载的是 `~/chrome-agent/extension` 那份副本。
 
-开发时 `~/.claude/skills/chrome-agent` 是指向本仓库的软链（仓库内的 `.claude/` 不入库），
-`setup.sh` 负责把它换成 `~/.claude/skills/` 与 `~/.codex/skills/`。
+**运行时是正式安装，说明书是拷贝**，所以改了仓库要重跑 `setup.sh` 才在这台机器上生效。
 
 写新的站点 skill 前请阅读 [`references/site-exploration-and-playbook-spec.md`](references/site-exploration-and-playbook-spec.md)。
 
