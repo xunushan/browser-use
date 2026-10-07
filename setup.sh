@@ -14,7 +14,7 @@ set -euo pipefail
 HOST_NAME="com.browseruse.chrome_agent"
 SKILL_NAME="chrome-agent"
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUNTIME_DIR="${CHROME_AGENT_HOME:-$HOME/.chrome-agent}"
 VENV_DIR="${CHROME_AGENT_VENV:-$RUNTIME_DIR/venv}"
 BIN_DIR="${CHROME_AGENT_BIN_DIR:-$HOME/.local/bin}"
@@ -169,6 +169,17 @@ PY
 for SKILL_DIR in "${SKILL_DIRS[@]}"; do
   mkdir -p "$SKILL_DIR"
   TARGET="$SKILL_DIR/$SKILL_NAME"
+  # Already this skill, in this very place: nothing to link. That is the normal
+  # case when the skill was installed by unpacking it into the skill directory
+  # and this script is then run from inside that installation. It must not fall
+  # through to the replacement below, which would delete the running copy and
+  # leave a symlink pointing at itself.
+  #
+  # -ef compares the files themselves, so it holds however the paths are spelt.
+  if [[ -e "$TARGET" && "$TARGET" -ef "$SOURCE_DIR" ]]; then
+    echo "skill already in place at $TARGET"
+    continue
+  fi
   if [[ -L "$TARGET" ]]; then
     rm -f "$TARGET"
   elif [[ -e "$TARGET" ]]; then
