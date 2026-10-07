@@ -214,8 +214,15 @@ snapshot → 选择 ref → validate → 操作 → 检查变化 → 新 snapsho
 - `chrome-agent sites list` 读 `chrome.permissions.getAll()`，列出已被用户授权、
   且不属于工具自身声明模式（`http://*/*`、`https://*/*`）的站点。
 - `chrome-agent sites revoke <origin>` 调 `chrome.permissions.remove()`。**删除不需要
-  用户手势，授予需要**（`chrome.permissions.request` 只能在弹窗的点击处理器里调用），
-  所以命令面没有 `grant`。撤销是幂等的：没授过也返回成功。
+  用户手势，授予需要**，所以命令面没有 `grant`。撤销是幂等的：没授过也返回成功。
+
+  依据：MDN 的 `permissions.request()` 页面写明 "The extension can only make the request
+  inside the handler for a user action"，而 `permissions.remove()` 页面没有任何手势要求，
+  只说明返回 Promise。本机实测亦一致：扩展热重载后从 service worker 调用
+  `sites revoke`（无任何点击）返回 `{"revoked": true}`，站点随即从 `sites list` 消失。
+  出处：<https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/permissions/request>
+  与 <https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/permissions/remove>
+  （Chrome 的 `chrome.permissions` 即这套 API 的实现）。
 - 撤销不会回收已经注入到页面的 Content Script；该页面刷新后才会重新受权限约束。
 
 没有目标网站权限时，扩展仍可能通过 `tabs` 权限看到标签页标题和 URL，但不能向页面注入 Content Script，也不能读取或操作 DOM。
