@@ -171,13 +171,57 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
+# What the runtime is made of: the package plus the metadata that decides what
+# gets installed with it. Recorded after a successful install, so the next run
+# can tell whether anything actually changed. Hashing in the venv's interpreter
+# rather than an outside one keeps the prerequisite list at "uv" — the venv
+# exists by now, and this needs nothing from the package.
+runtime_fingerprint() {
+  "$VENV_PYTHON" - "$SOURCE_DIR" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+digest = hashlib.sha256()
+for path in sorted([*(root / "chrome_agent").rglob("*.py"), root / "pyproject.toml"]):
+    digest.update(path.relative_to(root).as_posix().encode())
+    digest.update(path.read_bytes())
+print(digest.hexdigest())
+PY
+}
+
+FINGERPRINT="$(runtime_fingerprint)"
+INSTALLED_FINGERPRINT="$("$VENV_PYTHON" - "$RUNTIME_DIR/install.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    record = {}
+print(record.get("runtimeFingerprint", ""))
+PY
+)"
+
 # A real install, not editable. The runtime belongs in the install home, where
 # nothing about the checkout can move it: `chrome-agent` is the tool, and the
 # skill directory describes the tool rather than being it. The price is that an
 # edit in the tree reaches this machine only when this script runs again — which
 # is also the run that copies the manual out, so the two stay in step.
-# --reinstall because the wheel is built from this tree.
-"$UV" pip install --quiet --python "$VENV_PYTHON" --reinstall "$SOURCE_DIR"
+#
+# Skipped when the runtime has not changed, so that a run which only edits the
+# manual is only that. The import check is the other half: a venv rebuilt from
+# scratch has no package in it, and a matching fingerprint would otherwise let
+# this walk past an empty install. --reinstall because the wheel is built from
+# this tree, and a same-version wheel is not installed over an existing one.
+RESTART_DAEMON=0
+if [[ "$FINGERPRINT" != "$INSTALLED_FINGERPRINT" ]] ||
+  ! "$VENV_PYTHON" -c "import chrome_agent" 2>/dev/null; then
+  "$UV" pip install --quiet --python "$VENV_PYTHON" --reinstall "$SOURCE_DIR"
+  RESTART_DAEMON=1
+fi
 
 # ------------------------------------------------------------- the extension
 
@@ -282,19 +326,22 @@ PY
 VERSION="$("$VENV_PYTHON" -c 'import chrome_agent; print(chrome_agent.__version__)')"
 
 "$VENV_PYTHON" - "$RUNTIME_DIR/install.json" "$VERSION" "$EXTENSION_ID" \
-  "${SKILL_DIRS[0]}/$SKILL_NAME" "$EXTENSION_DIR" "$SOURCE_DIR" <<'PY'
+  "${SKILL_DIRS[0]}/$SKILL_NAME" "$EXTENSION_DIR" "$SOURCE_DIR" "$FINGERPRINT" <<'PY'
 import datetime
 import json
 import sys
 from pathlib import Path
 
-path, version, extension_id, skill_dir, extension_dir, source_dir = sys.argv[1:]
+path, version, extension_id, skill_dir, extension_dir, source_dir, fingerprint = sys.argv[1:]
 record = {
     "version": version,
     "extensionId": extension_id,
     "skillDir": skill_dir,
     "extensionDir": extension_dir,
     "sourceDir": source_dir,
+    # What the installed runtime was built from, so the next run can tell an
+    # edit to the code from an edit to the manual.
+    "runtimeFingerprint": fingerprint,
     "installedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
 # The hash of what the extension last confirmed it was running is not this
@@ -321,11 +368,44 @@ ln -sfn "$VENV_DIR/bin/chrome-agent" "$BIN_DIR/chrome-agent"
 
 # ------------------------------------------------------------- the extension
 
+# A daemon that was already running is running the code this script has just
+# replaced, and `start` below will not replace it: that command pings first and
+# returns if anything answers, and a daemon loads its code once and keeps it.
+# Measured here: one started 48 minutes before a reinstall was still serving the
+# old package afterwards, because `start` found it healthy.
+#
+# The native host goes with it, and that is why this is more than a `stop`. The
+# host is Chrome's process, not the daemon's, so it outlives the stop holding a
+# socket nothing is listening on. The extension still sees a non-null port, so
+# it never reconnects, and every command answers "No extension connected" — the
+# failure the troubleshooting section already describes. Killing the host makes
+# Chrome start a fresh one the moment the extension tries again, which is that
+# section's own recovery, done here so the user does not have to reload the
+# extension by hand.
+if ((RESTART_DAEMON)); then
+  # No "is it running" test first: `stop` answers that itself and costs nothing
+  # when nothing is listening, and the pid file is not a reliable witness — one
+  # was missing here while its daemon was up and serving.
+  "$BIN_DIR/chrome-agent" stop >/dev/null 2>&1 || true
+fi
+
 # Whether the extension is loaded is a question only the daemon can answer, so
 # the daemon is started here: it is part of this installation either way. Chrome
 # is not started — a browser opened by an installer is a browser nobody asked
 # for, and an extension loaded once stays loaded without one.
 "$BIN_DIR/chrome-agent" start >/dev/null 2>&1 || true
+
+if ((RESTART_DAEMON)); then
+  # The native host is killed only now, with the new daemon already listening.
+  # Order matters and this was got wrong once: the host is Chrome's process, so
+  # the extension notices it leaving within milliseconds and gets a new one, and
+  # a host that starts while no socket exists takes it on itself to spawn a
+  # daemon. Started before this one, the two raced — and because `start()` binds
+  # by unlinking whatever is at the socket path, the loser kept running with a
+  # socket that had been taken away from it: a second daemon, orphaned, holding
+  # no port. Done after, the host finds the socket already there.
+  pkill -f chrome_agent.native_host >/dev/null 2>&1 || true
+fi
 
 status_field() {
   "$VENV_PYTHON" -c '
@@ -359,6 +439,11 @@ fi
 RELOAD_NEEDED="$(status_field "$STATUS" reloadNeeded)"
 
 echo "Configured Chrome Agent $VERSION."
+if ((RESTART_DAEMON)); then
+  echo "  runtime       reinstalled from the checkout"
+else
+  echo "  runtime       unchanged since the last run, left as it is"
+fi
 echo "  extension ID  $EXTENSION_ID"
 echo "  extension     $EXTENSION_DIR"
 echo "  launcher      $LAUNCHER"

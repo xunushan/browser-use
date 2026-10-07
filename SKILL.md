@@ -17,7 +17,7 @@ These are the only files in this skill; nothing else needs reading up front.
 |---|---|
 | Any task | this file — the six sections below are enough to start |
 | `chrome-agent` is missing, the extension is not connected, or access was refused | [references/install-and-setup.md](references/install-and-setup.md) |
-| Exploring an unfamiliar site, or writing a site skill | [references/site-exploration-and-playbook-spec.md](references/site-exploration-and-playbook-spec.md) |
+| Exploring a site you have not worked with before | [references/site-exploration.md](references/site-exploration.md) |
 | Fetching images, video or audio from a page | [references/media-and-downloads.md](references/media-and-downloads.md) |
 | A ref stopped working, the snapshot is missing the target, scrolling does nothing, a download failed | [references/troubleshooting.md](references/troubleshooting.md) |
 
@@ -118,7 +118,7 @@ the command surface above — nothing else is a contract:
 - Keep site knowledge on the site's side. Nothing site-specific goes into this
   skill, its references, or the CLI.
 
-Writing one from scratch is covered by the exploration spec in the table above.
+How such a skill is laid out is its own project's business, not this one's.
 
 ## 5. Safety and handoff
 

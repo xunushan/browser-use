@@ -31,7 +31,7 @@ REFERENCES_DIR = "references"
 REFERENCE_NAMES = (
     "install-and-setup.md",
     "media-and-downloads.md",
-    "site-exploration-and-playbook-spec.md",
+    "site-exploration.md",
     "troubleshooting.md",
 )
 

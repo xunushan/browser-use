@@ -290,7 +290,7 @@ chrome-agent page download-media --tab-id <tab-id> --ref <media-ref> --prefix no
 
 - [`SKILL.md`](SKILL.md)：说明书。安装、操作循环、命令面、接口契约、安全交接，不含任何站点内容。
 - [`references/`](references/)：按需加载的细则——[安装与配置](references/install-and-setup.md)、
-  [站点 skill 规范](references/site-exploration-and-playbook-spec.md)、
+  [新网站探索](references/site-exploration.md)、
   [媒体与下载](references/media-and-downloads.md)、[排错](references/troubleshooting.md)。
 - [`setup.sh`](setup.sh)：安装与同步（uv 建环境并正式安装运行时、写 host 清单、把扩展同步到
   `~/chrome-agent/extension`、链好 `chrome-agent` 命令、把说明书拷进技能目录）；再跑一次不
@@ -300,7 +300,7 @@ chrome-agent page download-media --tab-id <tab-id> --ref <media-ref> --prefix no
 
 **运行时是正式安装，说明书是拷贝**，所以改了仓库要重跑 `setup.sh` 才在这台机器上生效。
 
-写新的站点 skill 前请阅读 [`references/site-exploration-and-playbook-spec.md`](references/site-exploration-and-playbook-spec.md)。
+写新的站点 skill 前请阅读 [`references/site-exploration.md`](references/site-exploration.md)。
 
 ---
 
