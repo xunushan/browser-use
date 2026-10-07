@@ -104,31 +104,35 @@ Content Script
 前置：macOS、已安装 Google Chrome、以及 [`uv`](https://docs.astral.sh/uv/)（没有就
 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。
 
-1. 把这个仓库放到智能体读技能的地方，它本身就是 skill：
+**仓库就是 skill**，装它 = 把仓库解到智能体读技能的地方。仓库归档里已经剔除了开发用的
+`tests/` 与 `docs/`（`.gitattributes` 的 `export-ignore`），所以装进去的只有最小可运行集：
 
-   ```bash
-   git clone https://github.com/xunushan/browser-use.git ~/.claude/skills/chrome-agent
-   ```
+```bash
+rm -rf ~/.claude/skills/chrome-agent
+mkdir -p ~/.claude/skills/chrome-agent
+curl -fsSL https://github.com/xunushan/browser-use/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=1 -C ~/.claude/skills/chrome-agent
+```
 
-2. 运行配置脚本：
+然后配置一次——运行环境、Native Messaging Host、扩展 ID 都在这一步备好，之后直接用
+`chrome-agent` 命令就行：
 
-   ```bash
-   ~/.claude/skills/chrome-agent/setup.sh
-   ```
+```bash
+~/.claude/skills/chrome-agent/setup.sh
+```
 
-   它用 `uv` 建 venv 并从本目录可编辑安装运行时（CLI / daemon / Native Messaging Host），
-   按 `extension/manifest.json` 里的 `key` 算出扩展 ID 写进 host 清单，并把本目录软链到
-   `~/.claude/skills/` 与 `~/.codex/skills/`。
+最后一个动作需要人点一下（脚本会打印确切路径与应有的扩展 ID）：打开 `chrome://extensions`，
+启用开发者模式，选择"加载已解压的扩展程序"，加载 `<skill 目录>/extension`。**Chrome 没有
+静默安装路径**，只能由用户点；清单里的 `key` 把扩展 ID 固定下来，**不需要再抄 ID**。
 
-3. 打开 `chrome://extensions`，启用开发者模式，选择"加载已解压的扩展程序"，加载
-   `extension/` 目录。**这一步必须由人点**——Chrome 没有静默安装路径。清单里的 `key`
-   把扩展 ID 固定下来，**不需要再抄 ID**：卡片上的 ID 应该与脚本打印的一致。
+验证：
 
-4. 验证：
+```bash
+chrome-agent ensure --launch-if-missing --wait-for-extension --json
+```
 
-   ```bash
-   chrome-agent ensure --launch-if-missing --wait-for-extension --json
-   ```
+想改这个 skill 而不是只用它，就把仓库 `git clone` 到技能目录（`setup.sh` 会把它软链过去，
+改动立即生效）；区别只是多带了 `tests/` 与 `docs/`。
 
 卸载用 `setup.sh --uninstall`（加 `--purge` 连虚拟环境一起删）；扩展在 `chrome://extensions`
 上移除。完整说明（各文件落在哪、装不上怎么查）见

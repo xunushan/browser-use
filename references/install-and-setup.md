@@ -31,19 +31,26 @@ Chrome 扩展（`extension/`）、配置脚本（`setup.sh`）。没有别的包
 
 ## 步骤
 
-### 1. 把 skill 放到智能体读技能的地方
+### 1. 把 skill 解到智能体读技能的地方
 
 本目录就是 skill，放到技能目录即完成"安装 skill"这一步——`SKILL.md` 在这里，
 `chrome_agent/` 和 `extension/` 也在同一层，脚本不用去别处找东西。
 
+仓库的归档已经剔除了开发用的 `tests/`、`docs/`（`.gitattributes` 里的 `export-ignore`），
+所以下载下来就是最小可运行集：
+
 ```bash
-git clone https://github.com/xunushan/browser-use.git ~/.claude/skills/chrome-agent
+rm -rf ~/.claude/skills/chrome-agent
+mkdir -p ~/.claude/skills/chrome-agent
+curl -fsSL https://github.com/xunushan/browser-use/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=1 -C ~/.claude/skills/chrome-agent
 ```
 
-用软链也可以（开发时更顺手，改动立即生效）：
+要改这个 skill 而不只是用它，就换成 `git clone`（或把已有 checkout 软链过去，改动立即
+生效），代价是多带 `tests/` 与 `docs/`：
 
 ```bash
-ln -s <本仓库路径> ~/.claude/skills/chrome-agent
+git clone https://github.com/xunushan/browser-use.git ~/.claude/skills/chrome-agent
 ```
 
 ### 2. 运行 setup.sh
