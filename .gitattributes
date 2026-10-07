@@ -1,0 +1,6 @@
+# The repository is the skill, and installing it means downloading the skill.
+# Development material stays in the repository but out of the archive, so
+# installing the skill does not drag a test suite and a design folder along.
+tests export-ignore
+docs export-ignore
+.gitattributes export-ignore
