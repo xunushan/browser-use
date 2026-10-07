@@ -8,17 +8,17 @@ from pathlib import Path
 def get_runtime_dir() -> Path:
     """Get the runtime directory for Chrome Agent."""
     system = platform.system()
-    if system == "Darwin":
-        path = Path.home() / ".chrome-agent" / "run"
-    elif system == "Linux":
+    if system == "Linux":
         xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
         if xdg_runtime:
             path = Path(xdg_runtime) / "chrome-agent"
         else:
             path = Path.home() / ".local" / "run" / "chrome-agent"
     else:
-        # Windows fallback (not supported in V1)
-        path = Path.home() / ".chrome-agent" / "run"
+        # macOS, and the Windows fallback (not supported in V1). The socket goes
+        # in the install home rather than in a dot directory of its own so that
+        # one directory holds the whole installation.
+        path = get_home_dir() / "run"
 
     path.mkdir(parents=True, exist_ok=True)
     path.chmod(0o700)
@@ -37,7 +37,7 @@ def get_data_dir() -> Path:
         else:
             path = Path.home() / ".local" / "share" / "chrome-agent"
     else:
-        path = Path.home() / ".chrome-agent"
+        path = get_home_dir()
 
     path.mkdir(parents=True, exist_ok=True)
     path.chmod(0o700)
@@ -50,6 +50,33 @@ def get_log_dir() -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_dir.chmod(0o700)
     return log_dir
+
+
+def get_home_dir() -> Path:
+    """Get the install home, which setup.sh calls $CHROME_AGENT_HOME.
+
+    The virtualenv, the launcher, install.json and the copy of the extension
+    Chrome loads all live here rather than in the skill directory: the skill is
+    replaced on every update, and Chrome remembers the path it loaded the
+    extension from, so that path has to outlive an update.
+
+    Deliberately not a dot directory. The one step of the install that needs a
+    person is picking this folder in Chrome's "Load unpacked" dialog, and macOS
+    file dialogs do not list dot directories at all — a hidden home cannot be
+    chosen there, by any route a user would think to try.
+    """
+    override = os.environ.get("CHROME_AGENT_HOME")
+    return Path(override) if override else Path.home() / "chrome-agent"
+
+
+def get_extension_dir() -> Path:
+    """Get the directory the extension is loaded from."""
+    return get_home_dir() / "extension"
+
+
+def get_install_record_path() -> Path:
+    """Get the file setup.sh records this installation in."""
+    return get_home_dir() / "install.json"
 
 
 def get_socket_path() -> Path:

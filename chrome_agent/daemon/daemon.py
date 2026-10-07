@@ -30,8 +30,8 @@ class ChromeAgentDaemon:
         self._shutdown_event = asyncio.Event()
         # Extension session management: session_id -> {writer, client_id, info}
         self._extension_sessions: dict[str, dict] = {}
-        # Pending requests from CLI: request_id -> asyncio.Future
-        self._pending_requests: dict[str, asyncio.Future] = {}
+        # Pending requests from CLI: request_id -> {future, writer}
+        self._pending_requests: dict[str, dict] = {}
         # Lock for thread-safe access
         self._lock = asyncio.Lock()
 
@@ -125,6 +125,21 @@ class ChromeAgentDaemon:
                 for session_id in disconnected:
                     del self._extension_sessions[session_id]
                     logger.info("Extension disconnected: %s", session_id)
+                # A request forwarded to a writer that just went away will never
+                # be answered — an extension reloading itself is the ordinary way
+                # that happens. Fail it here instead of letting the caller sit
+                # out the whole forwarding timeout.
+                orphaned = [
+                    request_id
+                    for request_id, pending in self._pending_requests.items()
+                    if pending["writer"] is writer
+                ]
+                for request_id in orphaned:
+                    pending = self._pending_requests.pop(request_id)
+                    if not pending["future"].done():
+                        pending["future"].set_exception(
+                            ConnectionError("Extension disconnected")
+                        )
             writer.close()
             with contextlib.suppress(BrokenPipeError, ConnectionResetError):
                 await writer.wait_closed()
@@ -173,7 +188,7 @@ class ChromeAgentDaemon:
         """Handle a response from the extension to a forwarded request."""
         request_id = message.get("id")
         if request_id in self._pending_requests:
-            future = self._pending_requests.pop(request_id)
+            future = self._pending_requests.pop(request_id)["future"]
             if not future.done():
                 if "result" in message:
                     future.set_result(message["result"])
@@ -193,11 +208,15 @@ class ChromeAgentDaemon:
             "system.stop": self._handle_stop,
             "session.register": self._handle_session_register,
             "session.unregister": self._handle_session_unregister,
+            "extension.status": self._handle_extension_status,
+            "extension.reload": self._handle_extension_reload,
             "tabs.list": self._handle_tabs_list,
             "tabs.open": self._handle_tabs_open,
             "tabs.navigate": self._handle_tabs_navigate,
             "tabs.claim": self._handle_tabs_claim,
             "tabs.activate": self._handle_tabs_activate,
+            "sites.list": self._handle_sites_list,
+            "sites.revoke": self._handle_sites_revoke,
             "page.snapshot": self._handle_page_snapshot,
             "page.click": self._handle_page_click,
             "page.fill": self._handle_page_fill,
@@ -272,6 +291,32 @@ class ChromeAgentDaemon:
                 logger.info(f"Extension unregistered: {session_id}")
         return {"status": "unregistered"}
 
+    # Extension management
+    async def _handle_extension_status(
+        self, params: dict, client_id: str = None, writer=None
+    ) -> dict:
+        """Report the connected extensions. The install state is the CLI's to answer."""
+        return {
+            "connected": bool(self._extension_sessions),
+            "sessions": [
+                {
+                    "extensionId": session.get("extensionId"),
+                    "protocolVersion": session.get("protocolVersion"),
+                    "browserVersion": session.get("browserVersion"),
+                    # On the daemon's clock, so a caller can tell a session that
+                    # came back after a reload from the one that never left.
+                    "connectedAt": session.get("connectedAt"),
+                }
+                for session in self._extension_sessions.values()
+            ],
+        }
+
+    async def _handle_extension_reload(
+        self, params: dict, client_id: str = None, writer=None
+    ) -> dict:
+        """Ask the extension to reload itself from the files on disk."""
+        return await self._forward_to_extension("extension.reload", params)
+
     # Tabs API
     async def _handle_tabs_list(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Handle tabs.list - forward to extension."""
@@ -292,6 +337,19 @@ class ChromeAgentDaemon:
     async def _handle_tabs_activate(self, params: dict, client_id: str = None, writer=None) -> dict:
         """Activate the target tab and focus its window."""
         return await self._forward_to_extension("tabs.activate", params)
+
+    # Sites API
+    async def _handle_sites_list(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """List the sites the extension currently has access to.
+
+        Chrome holds that list and only the extension can read it, so this is a
+        forward like any other — the daemon keeps no copy of its own.
+        """
+        return await self._forward_to_extension("sites.list", params)
+
+    async def _handle_sites_revoke(self, params: dict, client_id: str = None, writer=None) -> dict:
+        """Drop the extension's access to one site."""
+        return await self._forward_to_extension("sites.revoke", params)
 
     # Page API
     async def _handle_page_snapshot(self, params: dict, client_id: str = None, writer=None) -> dict:
@@ -394,9 +452,10 @@ class ChromeAgentDaemon:
         }
 
         try:
-            # Create a future to wait for the response
-            future = asyncio.Future()
-            self._pending_requests[request_id] = future
+            # Create a future to wait for the response. The writer is kept so
+            # that a disconnect can fail the requests that writer owed.
+            future: asyncio.Future = asyncio.Future()
+            self._pending_requests[request_id] = {"future": future, "writer": writer}
 
             # Send the forwarded message to the extension
             message_bytes = json.dumps(forwarded_message).encode("utf-8")

@@ -1,6 +1,7 @@
 """CLI for Chrome Agent."""
 
 import json
+import shutil
 import socket
 import struct
 import subprocess
@@ -11,7 +12,13 @@ from pathlib import Path
 import click
 
 from .. import __version__
-from ..utils.paths import get_lock_path, get_socket_path
+from ..utils.extension_sync import record_hash, recorded_hash, tree_hash
+from ..utils.paths import (
+    get_extension_dir,
+    get_install_record_path,
+    get_lock_path,
+    get_socket_path,
+)
 
 
 @click.group()
@@ -94,6 +101,13 @@ def ensure(
     sys.exit(1)
 
 
+# Distributions disagree on what the binary is called, and pgrep matches the
+# truncated comm name (15 characters on Linux), so the command line is searched
+# instead. The pattern only counts a name that stands alone as a command.
+LINUX_CHROME_BINARIES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+LINUX_CHROME_PATTERN = r"(^|/)(google-chrome(-stable)?|chromium(-browser)?)( |$)"
+
+
 def _is_chrome_running() -> bool:
     """Check if Chrome is running."""
     try:
@@ -106,7 +120,7 @@ def _is_chrome_running() -> bool:
             return result.returncode == 0
         elif sys.platform == "linux":
             result = subprocess.run(
-                ["pgrep", "google-chrome"],
+                ["pgrep", "-f", LINUX_CHROME_PATTERN],
                 capture_output=True,
                 text=True,
             )
@@ -116,12 +130,25 @@ def _is_chrome_running() -> bool:
         return False
 
 
+def _linux_chrome_binary() -> str | None:
+    """The Chrome binary on this machine, under whichever name it ships."""
+    for name in LINUX_CHROME_BINARIES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def _launch_chrome() -> None:
     """Launch the system Chrome without creating a separate profile."""
     if sys.platform == "darwin":
         subprocess.Popen(["open", "-a", "Google Chrome"])
     elif sys.platform == "linux":
-        subprocess.Popen(["google-chrome"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        binary = _linux_chrome_binary()
+        if binary:
+            subprocess.Popen(
+                [binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
 
 
 @cli.command()
@@ -161,6 +188,138 @@ def status() -> None:
             click.echo("Daemon not running")
     except Exception:
         click.echo("Daemon not running")
+
+
+@cli.group()
+def extension():
+    """Extension management commands."""
+    pass
+
+
+@extension.command("status")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def extension_status(json_output: bool) -> None:
+    """Report whether the extension is loaded, connected and up to date.
+
+    This is the question to ask before installing anything: a skill update does
+    not mean the extension needs loading again. It answers even when the daemon
+    is down or the extension is missing, because that is when it is needed.
+    """
+    install_dir = get_extension_dir()
+    current = tree_hash(install_dir) if install_dir.is_dir() else None
+    loaded = recorded_hash(get_install_record_path())
+    try:
+        connected = bool(_send_command("extension.status", {}).get("connected"))
+        daemon_running = True
+    except Exception:
+        connected = False
+        daemon_running = False
+
+    # A recorded hash is the only evidence of which files the extension is
+    # running, and it is recorded only by a reload the extension confirmed. So a
+    # connected extension with no record may be running an older copy, and the
+    # answer for it is to reload rather than to assume the disk was picked up.
+    reload_needed = bool(connected and current and current != loaded)
+
+    result = {
+        "connected": connected,
+        "daemonRunning": daemon_running,
+        "chromeRunning": _is_chrome_running(),
+        "extensionDir": str(install_dir),
+        "copied": current is not None,
+        "currentHash": current,
+        "loadedHash": loaded,
+        "reloadNeeded": reload_needed,
+    }
+    if json_output:
+        click.echo(json.dumps(result))
+        return
+
+    if not connected:
+        click.echo("Extension is not connected.")
+    elif loaded is None:
+        click.echo("Extension is connected, but it has not confirmed a reload of this")
+        click.echo("copy, so which files it is running is unknown. Reload it to be sure.")
+    elif reload_needed:
+        click.echo("Extension is connected; the files on disk have changed since it loaded.")
+        click.echo("Run `chrome-agent extension reload` to pick them up.")
+    else:
+        click.echo("Extension is loaded and up to date.")
+    click.echo(f"  directory   {install_dir}")
+    if current:
+        click.echo(f"  on disk     {current[:12]}")
+    if loaded:
+        click.echo(f"  last loaded {loaded[:12]}")
+    if not connected:
+        click.echo("  to load it  chrome://extensions -> Developer mode -> Load unpacked")
+
+
+@extension.command("reload")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def extension_reload(json_output: bool) -> None:
+    """Have the extension reload itself from the files on disk.
+
+    Chrome applies changed files to an unpacked extension only when it is
+    reloaded, and the button for that lives in chrome://extensions — but the
+    extension can also reload itself, which needs no click and no permission.
+    """
+    install_dir = get_extension_dir()
+    current = tree_hash(install_dir) if install_dir.is_dir() else None
+    before = _newest_session()
+
+    try:
+        result = _send_command("extension.reload", {})
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    if result.get("error"):
+        click.echo(f"Error: {result['error']}", err=True)
+        sys.exit(1)
+
+    reloaded = _wait_for_reconnect(before)
+    if reloaded and current:
+        record_hash(get_install_record_path(), current)
+
+    if json_output:
+        click.echo(json.dumps({"reloaded": reloaded, "hash": current}))
+        return
+    if reloaded:
+        click.echo("Extension reloaded.")
+    else:
+        click.echo(
+            "Reloaded, but the extension has not reconnected; check it is still enabled.",
+            err=True,
+        )
+        sys.exit(1)
+
+
+def _newest_session() -> float | None:
+    """The daemon's clock reading for the newest extension session.
+
+    Both readings compared here come from the daemon, so the CLI's own clock
+    never enters into whether the extension came back.
+    """
+    try:
+        sessions = _send_command("extension.status", {}).get("sessions") or []
+    except Exception:
+        return None
+    stamps = [
+        session["connectedAt"]
+        for session in sessions
+        if isinstance(session.get("connectedAt"), (int, float))
+    ]
+    return max(stamps) if stamps else None
+
+
+def _wait_for_reconnect(before: float | None, timeout: float = 20.0) -> bool:
+    """Wait for a session newer than the one that was there before the reload."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        newest = _newest_session()
+        if newest is not None and (before is None or newest > before):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 @cli.group()
@@ -262,6 +421,78 @@ def tabs_activate(tab_id: int, json_output: bool) -> None:
             click.echo(json.dumps(result))
         else:
             click.echo(f"Activated tab: {result.get('tabId')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.group()
+def sites():
+    """Site authorization commands.
+
+    Chrome's extension permission store is the only record of which sites are
+    authorized, and nothing here keeps a second copy of it. Granting needs a
+    user gesture, so it happens in the extension popup; these commands read that
+    state and drop a grant.
+    """
+
+
+@sites.command("list")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def sites_list(json_output: bool) -> None:
+    """List the sites the extension has been granted access to."""
+    try:
+        result = _send_command("sites.list", {})
+        if result.get("error"):
+            if json_output:
+                click.echo(json.dumps(result))
+            else:
+                click.echo(f"Error: {result['error']}", err=True)
+            sys.exit(1)
+
+        if json_output:
+            click.echo(json.dumps(result))
+            return
+
+        origins = result.get("origins", [])
+        if not origins:
+            click.echo("No sites granted. Grant access from the Chrome Agent popup on a tab.")
+            return
+        for origin in origins:
+            click.echo(origin)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@sites.command("revoke")
+@click.argument("origin")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def sites_revoke(origin: str, json_output: bool) -> None:
+    """Revoke the extension's access to one site.
+
+    ORIGIN is a site origin (https://example.com) or the exact pattern that
+    `sites list` printed. Granting is done in the popup; this only revokes, and
+    revoking what was never granted succeeds without doing anything.
+    """
+    try:
+        result = _send_command("sites.revoke", {"origin": origin})
+        if result.get("error"):
+            if json_output:
+                click.echo(json.dumps(result))
+            else:
+                click.echo(f"Error: {result['error']}", err=True)
+            sys.exit(1)
+
+        if json_output:
+            click.echo(json.dumps(result))
+            return
+
+        named = result.get("origin", origin)
+        if result.get("revoked"):
+            click.echo(f"Revoked site access for {named}")
+        else:
+            click.echo(f"Not granted, nothing to revoke: {named}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

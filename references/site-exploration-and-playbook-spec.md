@@ -10,7 +10,10 @@
 
 ## 新网站探索流程
 
-1. `ensure → tabs list/claim → full snapshot` 建立页面基线。
+1. `ensure → tabs list/claim → full snapshot` 建立页面基线。扩展不预置任何站点权限，先
+   `chrome-agent sites list --json` 看目标站点是否已授权；未授权时命令会返回
+   `Site access not granted for <host>`，让用户在该标签页点扩展图标授权后重试。授权一次即
+   长期有效，但站点 skill 里要写上这一步，别当成故障。
 2. 探索搜索、结果、详情打开方式及完整 href；禁止删除 token、签名、来源和过期参数。
 3. 识别最窄的标题、正文、媒体、评论容器以及背景/推荐排除区域。
 4. 验证实际滚动容器、懒加载、虚拟化列表、展开回复和媒体资源形态。

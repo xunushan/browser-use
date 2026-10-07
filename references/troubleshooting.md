@@ -47,9 +47,14 @@ chrome-agent tabs activate <tab-id> --json
 |---|---|
 | `Daemon socket not found` | 守护进程没起来：`chrome-agent start`（或 `chrome-agent ensure --launch-if-missing --wait-for-extension --timeout 30`） |
 | `No extension connected` | 守护进程在跑，但扩展没注册：确认 Chrome 打开且扩展已加载；扩展重新注册可能需要几十秒 |
+| 报 `Site access not granted for <host>` | 这个站点还没授权：`chrome-agent sites list --json` 先看已经授过哪些；没有就**让用户在该标签页点扩展图标并授权**，然后重试。扩展不预置任何站点权限，每个站点第一次都要点一次 |
+| 想收回某个站点的授权 | `chrome-agent sites revoke <origin>`（传 `sites list` 原样打印的 pattern）。**授予只能在扩展弹窗做**：`chrome.permissions.request` 需要用户手势，CLI 没有 grant。撤销不会回收已经注入到页面的 Content Script，那个页面刷新后才失效 |
+| 重启过 daemon（`stop` 再 `start`）之后，命令一直报 `No extension connected` | 旧的 native host 进程还活着：扩展那边 `nativePort` 非空，以为连接还在，keep-alive 就不会重连，而它转发到的 daemon 已经换了一个。在 `chrome://extensions` 上重载扩展即可恢复（或杀掉那个 `chrome_agent.native_host` 进程，扩展收到 `onDisconnect` 后会自己连回来） |
+| 扩展刚重载过，早先打开的页面里命令不生效 | 重载换掉的是扩展自己，页面里已注入的还是旧代码：刷新那个页面 |
 | 转发报错里提到扩展端口/消息通道关闭，例如 `... moved into back/forward cache, so the message channel is closed.` | 目标标签页在后台被冻结了：`tabs activate` 后重试；这是一次传输失败，不是页面失败，重试同样的操作即可 |
 
-`chrome-agent status --json` 可以先看服务、守护进程、扩展各自的连接状态，比逐个试命令快。
+`chrome-agent status` 看守护进程，`chrome-agent extension status --json` 看扩展
+（`connected` / `reloadNeeded`），比逐个试命令快。
 
 ## 滚动没反应
 

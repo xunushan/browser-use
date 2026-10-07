@@ -232,7 +232,7 @@
   }
 
   // The snapshot is shipped to the CLI as JSON, so it is capped. One dense row
-  // of a site's list — a Xiaohongshu comment, for instance — is around 20
+  // of a site's list — a comment on a post, for instance — is around 20
   // elements (author, avatar, body, like, date, its own menu), which puts the
   // default ceiling at roughly 22 rows. Callers that need the tail of a long
   // list pass a bigger limit; 0 means no cap.

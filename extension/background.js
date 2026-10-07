@@ -91,6 +91,9 @@ async function handleDaemonCommand(message) {
 
   try {
     let result;
+    // Reloading kills this worker, so it can only start once the response is
+    // out; the flag is read after sendResponse below.
+    let reloadAfterResponse = false;
 
     switch (method) {
       case "tabs.list":
@@ -107,6 +110,12 @@ async function handleDaemonCommand(message) {
         break;
       case "tabs.activate":
         result = await activateTab(params);
+        break;
+      case "sites.list":
+        result = await listSites(params);
+        break;
+      case "sites.revoke":
+        result = await revokeSite(params);
         break;
       case "page.snapshot":
         result = await pageSnapshot(params);
@@ -159,12 +168,25 @@ async function handleDaemonCommand(message) {
       case "page.unregister":
         result = await unregisterContentScript(params);
         break;
+      case "extension.reload":
+        // Reloading the extension is what makes Chrome read the edited files
+        // from disk. It is also what a click on Reload in chrome://extensions
+        // does, and unlike that click it needs no user and no permission.
+        result = { reloading: true };
+        reloadAfterResponse = true;
+        break;
       default:
         sendError(id, -32601, `Method not found: ${method}`);
         return;
     }
 
     sendResponse(id, result);
+
+    if (reloadAfterResponse) {
+      // Long enough for the response to leave the port. Without the wait, the
+      // daemon is left holding an open request until its timeout.
+      setTimeout(() => chrome.runtime.reload(), 50);
+    }
   } catch (error) {
     console.error("Error handling command:", error);
     sendError(id, -32603, `Internal error: ${error.message}`);
@@ -309,6 +331,74 @@ async function activateTab(params) {
   };
 }
 
+// Site authorization. Chrome's permission store is the only record of which
+// sites the extension may touch — nothing here keeps a second copy, and the
+// daemon keeps none at all. Granting needs a user gesture and lives in the
+// popup; what can happen from a command is reading the state and dropping a
+// grant, which is what these two do.
+
+// The patterns the tool declares for itself. They are the capability of being
+// able to ask for any site, not a site the user chose, so they are never
+// reported as one.
+const TOOL_HOST_PATTERNS = new Set([
+  "http://*/*",
+  "https://*/*",
+  "*://*/*",
+  "<all_urls>",
+]);
+
+// A site is named by the match pattern the popup grants, `scheme://host/*`.
+// Accept that pattern back verbatim — including a wildcard host — or a plain
+// origin, and give both the one shape Chrome and the popup already use.
+function originPatternOf(value) {
+  const asPattern = /^(https?):\/\/([^/]+)\/\*$/.exec(value);
+  if (asPattern) return `${asPattern[1]}://${asPattern[2]}/*`;
+
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol) || !url.hostname) {
+    throw new Error(`Not an http(s) site: ${value}`);
+  }
+  return `${url.protocol}//${url.hostname}/*`;
+}
+
+async function listSites() {
+  try {
+    const granted = await chrome.permissions.getAll();
+    const origins = (granted.origins || []).filter(
+      origin => /^https?:\/\//.test(origin) && !TOOL_HOST_PATTERNS.has(origin)
+    );
+    return { origins };
+  } catch (error) {
+    return { error: `Could not read site access: ${error.message}` };
+  }
+}
+
+async function revokeSite(params) {
+  const { origin } = params || {};
+
+  let pattern;
+  try {
+    pattern = originPatternOf(origin);
+  } catch (error) {
+    // Expected input errors come back as a result, not as a protocol error:
+    // the daemon would wrap the latter in its own "Failed to forward" text and
+    // bury this message.
+    return { error: error.message, origin };
+  }
+
+  try {
+    const granted = await chrome.permissions.contains({ origins: [pattern] });
+    if (!granted) {
+      // Already at the wanted end state. Saying so is not a failure.
+      return { revoked: false, granted: false, origin: pattern };
+    }
+    const removed = await chrome.permissions.remove({ origins: [pattern] });
+    return { revoked: removed, granted: true, origin: pattern };
+  } catch (error) {
+    return { error: `Could not revoke ${pattern}: ${error.message}`, origin: pattern };
+  }
+}
+
 // Content Script injection functions
 async function injectContentScript(params) {
   const { tabId } = params;
@@ -361,7 +451,7 @@ async function registerContentScript(params) {
       {
         id: scriptId,
         matches: [urlPattern || "<all_urls>"],
-        js: ["content_scripts/content.js"],
+        js: ["content.js"],
         runAt: "document_start",
         world: "ISOLATED",
         persistAcrossSessions: false,

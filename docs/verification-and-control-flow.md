@@ -144,7 +144,7 @@ chrome-agent page snapshot \
 扩展 → Content Script 注入 → DOM 快照 → 原路返回 CLI
 ```
 
-如果返回站点未授权错误，应在目标标签页点击 Chrome Agent 图标并授权当前网站。站点授权由 Chrome 的扩展权限系统保存和强制执行，不是 daemon 的授权列表。
+如果返回站点未授权错误，先用 `chrome-agent sites list --json` 看该站点是否已授权，未授权则在目标标签页点击 Chrome Agent 图标并授权当前网站。站点授权由 Chrome 的扩展权限系统保存和强制执行；CLI 的 `sites list` / `sites revoke` 只是读写这份 Chrome 状态的窗口，daemon 不保存授权名单。
 
 ## 5. 智能体验收流程
 
@@ -206,11 +206,17 @@ snapshot → 选择 ref → validate → 操作 → 检查变化 → 新 snapsho
 
 站点权限来自 Chrome 扩展 manifest 和 `chrome.permissions` API：
 
-- `host_permissions` 是扩展加载时获得的固定权限。
+- `host_permissions` 是扩展加载时获得的固定权限（本扩展不声明，见下）。
 - `optional_host_permissions` 需要用户通过扩展弹窗主动授权。
-- Chrome 保存并强制执行权限。
+- Chrome 保存并强制执行权限，**这也是唯一的授权记录**。
 - 扩展在注入 Content Script 前检查权限。
 - daemon 只转发操作，不保存网站授权名单，也不能绕过 Chrome 权限。
+- `chrome-agent sites list` 读 `chrome.permissions.getAll()`，列出已被用户授权、
+  且不属于工具自身声明模式（`http://*/*`、`https://*/*`）的站点。
+- `chrome-agent sites revoke <origin>` 调 `chrome.permissions.remove()`。**删除不需要
+  用户手势，授予需要**（`chrome.permissions.request` 只能在弹窗的点击处理器里调用），
+  所以命令面没有 `grant`。撤销是幂等的：没授过也返回成功。
+- 撤销不会回收已经注入到页面的 Content Script；该页面刷新后才会重新受权限约束。
 
 没有目标网站权限时，扩展仍可能通过 `tabs` 权限看到标签页标题和 URL，但不能向页面注入 Content Script，也不能读取或操作 DOM。
 

@@ -24,28 +24,30 @@ These are the only files in this skill; nothing else needs reading up front.
 ## 0. Install once, if the command is missing
 
 ```bash
-chrome-agent ensure --launch-if-missing --wait-for-extension --timeout 30 --json
+command -v chrome-agent >/dev/null || echo "not installed"
+chrome-agent extension status --json   # connected: true means ready
 ```
 
-If that command does not exist, this skill is not installed yet. This directory
-*is* the skill, and it ships the whole tool: `chrome_agent/` (runtime),
-`extension/` (the Chrome extension), and `setup.sh`. Read
+If the command is missing, this skill is not installed. This directory *is* the
+skill: `chrome_agent/`, `extension/`, `setup.sh`. Read
 [references/install-and-setup.md](references/install-and-setup.md) and follow it
-end to end — it runs `setup.sh` and then has the user load `extension/` at
-`chrome://extensions`. That single click is the only step a machine cannot do,
-so do not attempt to install the extension by any other route.
+end to end — the click at `chrome://extensions` is the one step a machine cannot
+do, and it is needed once per browser profile.
+
+If it exists, install nothing. An update replaces the skill directory, and the
+extension does not live there, so no update and no reinstall needs the extension
+loaded again. Only `connected: false` is worth acting on.
 
 ## 1. Start and authorize
 
-Reuse a suitable signed-in tab rather than opening a new one, and claim it before
-operating on it: `chrome-agent tabs claim <tab-id> --json`.
-
-Bring a background tab forward before anything that depends on visible layout or
-the current viewport: `chrome-agent tabs activate <tab-id> --json`.
+Reuse a suitable signed-in tab instead of opening a new one, and claim it before
+operating on it: `chrome-agent tabs claim <tab-id> --json`. Bring a background tab
+forward before anything that depends on visible layout or the current viewport:
+`chrome-agent tabs activate <tab-id> --json`.
 
 If the tab has not been authorized, ask the user to click the Chrome Agent
-extension on that tab and grant access. Never try to get around login, CAPTCHA,
-QR confirmation, access controls, or site restrictions.
+extension on that tab and grant access. Never work around login, CAPTCHA, QR
+confirmation, access controls, or site restrictions.
 
 ## 2. The operating loop
 
@@ -75,29 +77,28 @@ Four things about refs and snapshots are worth getting right the first time:
 - **An `href` is opaque.** Use it exactly as returned: do not rebuild it from an
   ID, shorten it, deduplicate it by path, or drop its query string or fragment.
   Sites encode routing, provenance, expiry, signatures and signed-in access
-  context there. Prefer clicking a live ref on the current page, and let the
-  site's own flow attach that context; when you must navigate, pass the href
-  unchanged:
+  context there. Prefer clicking a live ref on the current page; when you must
+  navigate, pass the href unchanged:
 
   ```bash
   chrome-agent tabs navigate <tab-id> '<complete-href>' --json
   ```
 - **A snapshot is the first N elements in on-screen order** (top to bottom, then
-  left to right), N = 500 unless `--limit` says otherwise. The response carries
-  `matched` and `truncated`: when the target is missing, read those before
-  anything else, then raise `--limit`.
+  left to right), N = 500 unless `--limit` says otherwise. When the target is
+  missing, read `matched` and `truncated` first, then raise `--limit`.
 
 ## 3. Command surface
 
-Every command is `chrome-agent <group> <command>`, and `chrome-agent --help`
-lists the groups; parameter details are in `<group> <command> --help`.
+`ensure`, `status`, `start`, `stop` and `version` stand alone; every other command
+is `chrome-agent <group> <command>`. Four groups, and this is the whole surface.
 
 ```text
-service:  ensure | status | start | stop | version
-tabs:     tabs list | open | claim | activate | navigate
-observe:  page snapshot | extract | text --ref | validate | wait
-act:      page click | fill | keypress | scroll
-media:    page images | page download-images | page media | page download-media
+chrome-agent               ensure | status | start | stop | version
+chrome-agent extension     status | reload                        (section 0)
+chrome-agent sites         list | revoke
+chrome-agent tabs          list | open | claim | activate | navigate
+chrome-agent page          snapshot | extract | text | validate | wait | scroll
+chrome-agent page          click | fill | keypress | screenshot | images | download-images | media | download-media
 ```
 
 Downloads use the user's Chrome profile and land in the browser's normal
@@ -112,7 +113,7 @@ the command surface above — nothing else is a contract:
 
 - Call the `chrome-agent` CLI. Do not import `chrome_agent`, and do not build
   paths into this directory; the skill is installed wherever the agent keeps
-  skills, which is not where it was written.
+  skills, not where it was written.
 - Read `--json` output and its exit codes. Human-readable output is for people.
 - Keep site knowledge on the site's side. Nothing site-specific goes into this
   skill, its references, or the CLI.

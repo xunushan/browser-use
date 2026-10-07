@@ -2,6 +2,7 @@
 
 import json
 import pathlib
+import re
 
 from chrome_agent.utils.extension_id import extension_id, manifest_extension_id
 
@@ -46,6 +47,41 @@ def test_manifest_valid():
     for _size, path in manifest.get("icons", {}).items():
         icon_path = ext_dir / path
         assert icon_path.exists(), f"Icon missing: {path}"
+
+
+def test_the_manifest_ships_no_site_permissions():
+    """This is a browser tool, not a decision about which sites to trust.
+
+    Access to a site is the user's to grant, through the extension popup. A
+    host_permissions entry preinstalled here would authorize one site and no
+    other, which is a site decision this repository has no business making.
+    """
+    ext_dir = pathlib.Path(__file__).parent.parent / "extension"
+
+    with open(ext_dir / "manifest.json") as f:
+        manifest = json.load(f)
+
+    assert "host_permissions" not in manifest
+    assert set(manifest["optional_host_permissions"]) == {"http://*/*", "https://*/*"}
+
+
+def test_every_script_the_extension_injects_exists():
+    """A typo in a path here fails inside the browser, at the moment of use.
+
+    Both injection routes — executeScript on a tab, and registerContentScripts
+    for a session — take file lists; each name is checked against the extension
+    directory as written.
+    """
+    ext_dir = pathlib.Path(__file__).parent.parent / "extension"
+    background = (ext_dir / "background.js").read_text(encoding="utf-8")
+
+    referenced: list[str] = []
+    for group in re.findall(r"files:\s*\[([^\]]*)\]", background):
+        referenced.extend(re.findall(r"[\"']([^\"']+)[\"']", group))
+
+    assert referenced, "no injected file list found; has the injection code moved?"
+    for name in referenced:
+        assert (ext_dir / name).is_file(), f"background.js injects a missing file: {name}"
 
 
 def test_manifest_pins_the_extension_id():

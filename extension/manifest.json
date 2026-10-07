@@ -12,9 +12,6 @@
     "alarms",
     "downloads"
   ],
-  "host_permissions": [
-    "https://*.xiaohongshu.com/*"
-  ],
   "optional_host_permissions": [
     "http://*/*",
     "https://*/*"

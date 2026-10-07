@@ -18,16 +18,19 @@ import sys
 import threading
 import time
 from contextlib import suppress
-from pathlib import Path
 from typing import BinaryIO
+
+# The daemon and the CLI both take these paths from one place. This module used
+# to spell them out for itself, which is how it kept talking to a socket the
+# daemon no longer listened on after the install home moved.
+from ..utils.paths import get_log_dir, get_socket_path
 
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 _stdout_lock = threading.Lock()
 
 
 def setup_logging() -> None:
-    log_dir = Path.home() / ".chrome-agent" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = get_log_dir()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -40,10 +43,6 @@ def setup_logging() -> None:
 
 setup_logging()
 logger = logging.getLogger(__name__)
-
-
-def get_socket_path() -> Path:
-    return Path.home() / ".chrome-agent" / "run" / "daemon.sock"
 
 
 def _read_exact_stream(stream: BinaryIO, size: int) -> bytes | None:
