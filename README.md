@@ -105,11 +105,11 @@ Chrome Agent 的通用接口只解决跨站能力，**特定网站的具体流�
    ./install.sh
    ```
 
-   该脚本构建并安装 CLI / daemon / Native Messaging Host，按清单里的 `key` 算出扩展 ID 写进 host 清单，并把 `skill/chrome-agent` 安装（开发模式软链、发布包复制）到 `~/.claude/skills/` 与 `~/.codex/skills/`。
+   该脚本构建并安装 CLI / daemon / Native Messaging Host，按清单里的 `key` 算出扩展 ID 写进 host 清单，并把 `skill/chrome-agent` 软链到 `~/.claude/skills/` 与 `~/.codex/skills/`。
 
 4. 回到 `chrome://extensions` 重新加载扩展；脚本会打印应有的扩展 ID，核对一致即可。
 
-不想留下仓库时用发布包：`./release.sh` 产出 `chrome-agent-<版本>-bundle.tar.gz`，解压后 `./install.sh`，装完可删掉解压目录。卸载用 `./install.sh --uninstall`。细节见 [docs/release.md](docs/release.md)。
+卸载用 `./install.sh --uninstall`（加 `--purge` 连虚拟环境一起删）。
 
 小红书已预授权；操作其他网站前，用户需在目标标签页点击 Chrome Agent 图标并授权当前网站。
 

@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
 # Install Chrome Agent: the runtime, the Native Messaging host, and the skill.
 #
-# Two modes, told apart by what sits next to this script:
-#   checkout  pyproject.toml is here. Build a wheel from the tree, install it
-#             into the venv, and link the skill back into the tree so edits take
-#             effect without reinstalling.
-#   bundle    a chrome_agent-*.whl is here. Install it as-is and copy the skill,
-#             so the unpacked release directory is the only thing needed and the
-#             repository can be deleted afterwards.
+# Runs from a checkout. The runtime is built from this tree and installed into a
+# venv, and the skill is linked back to this tree so edits take effect without
+# reinstalling.
 #
 # The extension is not installed here: it is loaded by hand at
-# chrome://extensions, from extension/ in a checkout or from the bundle.
+# chrome://extensions, from extension/.
 set -euo pipefail
 
 HOST_NAME="com.browseruse.chrome_agent"
@@ -23,8 +19,6 @@ BIN_DIR="${CHROME_AGENT_BIN_DIR:-$HOME/.local/bin}"
 HOST_DIR="${CHROME_AGENT_HOST_DIR:-$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts}"
 SKILL_DIRS_DEFAULT="$HOME/.claude/skills $HOME/.codex/skills"
 
-MODE=""
-FROM_DIR=""
 EXTENSION_ID_OVERRIDE=""
 SKILL_DIRS_OVERRIDE=""
 UNINSTALL=0
@@ -35,8 +29,6 @@ usage() {
   cat <<'TEXT'
 Usage: ./install.sh [options]
 
-  --from <dir>         install from a release directory (wheel + extension/ +
-                       skill/), instead of from this checkout
   --extension-id <id>  use this 32-character ID for the Native Messaging host
                        instead of the one the manifest key pins
   --skill-dirs "<dirs>"  space-separated skill directories, default
@@ -55,7 +47,6 @@ die() {
 
 while (($#)); do
   case "$1" in
-    --from) FROM_DIR="${2:?--from needs a directory}"; shift 2 ;;
     --extension-id) EXTENSION_ID_OVERRIDE="${2:?--extension-id needs an ID}"; shift 2 ;;
     --skill-dirs) SKILL_DIRS_OVERRIDE="${2:?--skill-dirs needs a list}"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
@@ -71,10 +62,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 read -r -a SKILL_DIRS <<<"${SKILL_DIRS_OVERRIDE:-$SKILL_DIRS_DEFAULT}"
-
-if [[ -n "$FROM_DIR" ]]; then
-  SOURCE_DIR="$(cd "$FROM_DIR" && pwd)"
-fi
 
 if ((UNINSTALL)); then
   rm -f "$HOST_DIR/$HOST_NAME.json" "$RUNTIME_DIR/launcher.sh" "$RUNTIME_DIR/install.json"
@@ -97,12 +84,8 @@ fi
 
 # ---------------------------------------------------------------- the runtime
 
-if [[ -f "$SOURCE_DIR/pyproject.toml" ]]; then
-  MODE="checkout"
-elif compgen -G "$SOURCE_DIR/chrome_agent-*.whl" >/dev/null; then
-  MODE="bundle"
-else
-  die "$SOURCE_DIR holds neither pyproject.toml nor chrome_agent-*.whl"
+if [[ ! -f "$SOURCE_DIR/pyproject.toml" ]]; then
+  die "$SOURCE_DIR has no pyproject.toml; run this from the checkout."
 fi
 
 BOOTSTRAP_PYTHON="${PYTHON_BIN:-$(command -v python3 || true)}"
@@ -115,15 +98,11 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-if [[ "$MODE" == "checkout" ]]; then
-  WHEEL_DIR="$RUNTIME_DIR/build"
-  mkdir -p "$WHEEL_DIR"
-  rm -f "$WHEEL_DIR"/chrome_agent-*.whl
-  "$VENV_PYTHON" -m pip wheel --quiet --no-deps --wheel-dir "$WHEEL_DIR" "$SOURCE_DIR"
-  WHEEL="$(ls -t "$WHEEL_DIR"/chrome_agent-*.whl | head -1)"
-else
-  WHEEL="$(ls -t "$SOURCE_DIR"/chrome_agent-*.whl | head -1)"
-fi
+WHEEL_DIR="$RUNTIME_DIR/build"
+mkdir -p "$WHEEL_DIR"
+rm -f "$WHEEL_DIR"/chrome_agent-*.whl
+"$VENV_PYTHON" -m pip wheel --quiet --no-deps --wheel-dir "$WHEEL_DIR" "$SOURCE_DIR"
+WHEEL="$(ls -t "$WHEEL_DIR"/chrome_agent-*.whl | head -1)"
 
 # The wheel carries chrome_agent/ only, so its dependencies are resolved here
 # rather than dragged along: repeating an install must not require the network
@@ -209,24 +188,19 @@ for SKILL_DIR in "${SKILL_DIRS[@]}"; do
       die "Refusing to replace $TARGET: it is not a $SKILL_NAME skill. Use --force."
     fi
   fi
-  if [[ "$MODE" == "checkout" ]]; then
-    ln -s "$SKILL_SOURCE" "$TARGET"
-  else
-    cp -R "$SKILL_SOURCE" "$TARGET"
-    find "$TARGET" -name '__pycache__' -type d -prune -exec rm -rf {} +
-  fi
+  ln -s "$SKILL_SOURCE" "$TARGET"
 done
 
 VERSION="$("$VENV_PYTHON" -c 'import chrome_agent; print(chrome_agent.__version__)')"
 
 "$VENV_PYTHON" - "$RUNTIME_DIR/install.json" "$VERSION" "$EXTENSION_ID" \
-  "${SKILL_DIRS[0]}/$SKILL_NAME" "$EXTENSION_DIR" "$SOURCE_DIR" "$MODE" <<'PY'
+  "${SKILL_DIRS[0]}/$SKILL_NAME" "$EXTENSION_DIR" "$SOURCE_DIR" <<'PY'
 import datetime
 import json
 import sys
 from pathlib import Path
 
-path, version, extension_id, skill_dir, extension_dir, source_dir, mode = sys.argv[1:]
+path, version, extension_id, skill_dir, extension_dir, source_dir = sys.argv[1:]
 Path(path).write_text(
     json.dumps(
         {
@@ -235,7 +209,6 @@ Path(path).write_text(
             "skillDir": skill_dir,
             "extensionDir": extension_dir,
             "sourceDir": source_dir,
-            "mode": mode,
             "installedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         },
         indent=2,
@@ -255,7 +228,7 @@ ln -sfn "$VENV_DIR/bin/chrome-agent" "$BIN_DIR/chrome-agent"
 
 # --------------------------------------------------------------------- done
 
-echo "Installed Chrome Agent $VERSION ($MODE)."
+echo "Installed Chrome Agent $VERSION."
 echo "  extension ID  $EXTENSION_ID"
 echo "  launcher      $LAUNCHER"
 echo "  host manifest $HOST_DIR/$HOST_NAME.json"
