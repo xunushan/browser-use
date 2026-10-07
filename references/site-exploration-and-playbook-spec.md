@@ -1,8 +1,12 @@
-# 网站探索与 Site Playbook 规范
+# 网站探索与站点 Skill 规范
 
 ## 目标
 
-把跨网站能力保留在 Chrome Agent CLI，把网站结构、状态、恢复规则和确定性解析代码沉淀在本 skill 的 `sites/<site>/`（与 `SKILL.md` 同级）。探索时只使用用户授权的当前 Chrome，不绕过登录、验证码、扫码、风控或内容保护。
+把跨网站能力保留在 Chrome Agent CLI，把网站结构、状态、恢复规则和确定性解析代码放进
+**该站点自己的 skill**。站点 skill 是独立项目空间，不在本 skill 目录里：它只通过
+`chrome-agent` 的命令面驱动浏览器，不 import 本 skill 的代码、不依赖本目录的路径
+（契约见 `SKILL.md` 第 4 节）。探索时只使用用户授权的当前 Chrome，不绕过登录、验证码、
+扫码、风控或内容保护。
 
 ## 新网站探索流程
 
@@ -23,44 +27,39 @@
 - `page scroll --ref`：内部容器懒加载。
 - `page validate/click/wait`：动态控件和状态转换。
 
-媒体容器的 `<video>` 可能是 `blob:`，而可下载地址存在于页面级 JSON-LD。探索时比较 scoped 与 page-level media，按当前详情状态、类型、时长和结构化数据关联，不能只检查播放器子树。
+媒体容器的 `<video>` 可能是 `blob:`，而可下载地址存在于页面级 JSON-LD。探索时比较 scoped 与
+page-level media，按当前详情状态、类型、时长和结构化数据关联，不能只检查播放器子树。
 
-## Playbook 包结构
+## 站点 skill 的包结构
 
 ```text
-<skill 目录>/sites/<site>/
-  PLAYBOOK.md
-  locators.yaml
-  scripts/
-    collect.py
-  schemas/
-    output.schema.json
+<站点 skill 目录>/     # 独立项目空间；整个目录就是技能目录
+  SKILL.md             # 入口：`description` 决定什么时候被选中，正文指向 PLAYBOOK
+  PLAYBOOK.md          # 流程 / 踩坑与证据 / 目录与文件职责
+  locators.yaml        # 页面语义规则（选择器、作用域、阈值）
+  scripts/             # 确定性编排：CLI 调用、解析、去重、格式化、落盘
+  schemas/             # 产出文件的结构合同，与脚本产出逐字段对应
+  tests/               # 规则单测 + 产出与合同一致性
 ```
 
-站点目录不要靠拼路径找：`chrome-agent playbook --domain <host> --dir` 会打印它，`--domain <host>` 打印要读的 `PLAYBOOK.md`；两者都按 skill 的实际安装位置解析。站点脚本在自己的目录里互相引用，因此用打印出来的绝对路径运行它们。
+站点脚本在自己的目录树内互相引用，用绝对路径运行；**不要写死本机 skill 路径，也不要去探测
+`chrome-agent` 的安装位置**——命令名就是接口，PATH 上的 `chrome-agent` 就是它。
 
-- `PLAYBOOK.md`：页面状态机、语义识别、标准工作流、完成条件、失败恢复与已知限制，附关键观测的证据。
-- `locators.yaml`：页面语义规则（选择器、作用域、阈值）。脚本读它，不内联站点选择器。
-- `scripts/`：智能体确定本次 tab/ref 后执行的确定性 CLI 编排、去重、解析和格式化。
-- `schemas/`：产出文件的结构合同，与脚本的产出逐字段对应。
+## PLAYBOOK 必备章节
 
-## Playbook 必备章节
+三节，缺一不可：
 
 ```markdown
-# <网站>/<任务> Playbook
+# <网站>内容采集 Playbook
 适用站点：`example.com`（包括其子域名）
-## 目标与非目标
-## 前置条件与授权
-## 页面状态模型
-## 语义识别规则
-## 标准工作流
-## 内容与媒体提取
-## 完成条件
-## 失败恢复
-## 安全与人工交接
-## 已知限制
-## 验证用例
+
+## 1 完整流程        # 照顺序跑完即一次采集；每步一条可直接粘贴的命令 + 判据
+## 2 关键踩坑与证据   # 一条结论一行，附观测或实测证据；出问题回来查
+## 3 目录与文件职责   # 各文件是什么、谁读它、什么时候改
 ```
+
+它是行为准则，不是日志：不写"这次改了什么"的变迁史，不写"验证用例"清单（回归测试在
+`tests/` 里），也不重复同一事实三遍。
 
 ## 语义规则
 

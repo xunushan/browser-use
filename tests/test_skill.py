@@ -1,23 +1,40 @@
-import re
+"""The skill is this repository, and it is generic.
+
+The skill ships the whole tool — runtime, extension, install script — so that an
+agent that finds it needs nothing else. What it must not ship is site knowledge:
+a website's containers, selectors and measurements belong to that website's own
+skill, which drives this one through the CLI. The marker scan below is how that
+stays true.
+"""
+
 from pathlib import Path
 
-SKILL_DIR = Path(__file__).parent.parent / "skill" / "chrome-agent"
+SKILL_DIR = Path(__file__).parent.parent
 SKILL = SKILL_DIR / "SKILL.md"
 
 REFERENCES = [
+    "install-and-setup.md",
     "site-exploration-and-playbook-spec.md",
     "media-and-downloads.md",
     "troubleshooting.md",
 ]
 
-# Site-specific knowledge belongs in sites/<site>/PLAYBOOK.md. A site name, one
-# site's class names, or an observation measured on a single site appearing in
-# the generic part of the skill means something was filed in the wrong place.
+# A site name, one site's class names, or an observation measured on a single
+# site appearing in the generic part of the skill means something was filed in
+# the wrong place.
 SITE_MARKERS = ("xiaohongshu", "小红书", "xhs", "note-text", "comment-", "xsec", "轮播")
 
-# SKILL.md and references/ are the generic skill; sites/ is where site content
-# is supposed to be, so the marker scan covers only the former.
-GENERIC_FILES = [SKILL]
+GENERIC_FILES = [SKILL, *sorted((SKILL_DIR / "references").glob("*.md"))]
+
+
+def test_the_skill_ships_the_whole_tool():
+    """Install = put this directory where the agent keeps skills, and nothing else.
+
+    If the runtime or the extension lived outside the skill, installing would
+    mean assembling pieces from two places again.
+    """
+    for relative in ("chrome_agent", "extension/manifest.json", "setup.sh"):
+        assert (SKILL_DIR / relative).exists(), relative
 
 
 def test_project_skill_exposes_generic_browser_workflow():
@@ -53,40 +70,35 @@ def test_the_references_are_listed_and_exist():
 
 def test_every_reference_is_linked_to_from_the_read_on_demand_table():
     content = SKILL.read_text(encoding="utf-8")
-    table = content.split("## Read on demand", 1)[1].split("## 1.", 1)[0]
+    table = content.split("## Read on demand", 1)[1].split("## 0.", 1)[0]
 
     for name in REFERENCES:
         assert f"references/{name}" in table, name
 
 
-def test_the_read_on_demand_table_points_at_site_playbooks():
+def test_the_install_section_hands_off_to_the_manual():
+    """An agent that has never run this needs both the script and the one click."""
     content = SKILL.read_text(encoding="utf-8")
-    table = content.split("## Read on demand", 1)[1].split("## 1.", 1)[0]
+    section = content.split("## 0. Install", 1)[1].split("## 1.", 1)[0]
 
-    assert "PLAYBOOK.md" in table
-    assert "section 4" in table
+    assert "setup.sh" in section
+    assert "references/install-and-setup.md" in section
+    assert "chrome://extensions" in section
+
+
+def test_the_interface_contract_names_the_cli_and_nothing_else():
+    """A site skill may depend on the command surface; that is the whole contract."""
+    content = SKILL.read_text(encoding="utf-8")
+    section = content.split("## 4. What a site skill may depend on", 1)[1].split("## 5.", 1)[0]
+
+    assert "chrome-agent" in section
+    assert "Do not import `chrome_agent`" in section
+    assert "--json" in section
 
 
 def test_no_site_specific_content_in_the_generic_skill():
-    """Site content goes to sites/<site>/PLAYBOOK.md, not here."""
-    generic = GENERIC_FILES + sorted((SKILL_DIR / "references").glob("*.md"))
-    for path in generic:
+    """Site content goes to that site's own skill, not here."""
+    for path in GENERIC_FILES:
         text = path.read_text(encoding="utf-8").lower()
         found = [marker for marker in SITE_MARKERS if marker in text]
         assert not found, f"{path.name} 含站点专属内容：{found}"
-
-
-def test_playbooks_are_routed_to_by_registrable_domain():
-    """The route is a command, not a path: the skill is installed elsewhere."""
-    content = SKILL.read_text(encoding="utf-8")
-
-    assert re.search(r"registrable domain", content)
-    assert "chrome-agent playbook --domain" in content
-
-
-def test_every_site_directory_has_a_playbook():
-    sites = SKILL_DIR / "sites"
-
-    assert sites.is_dir()
-    for site in sorted(sites.iterdir()):
-        assert (site / "PLAYBOOK.md").is_file(), site.name

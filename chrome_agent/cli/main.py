@@ -10,7 +10,7 @@ from pathlib import Path
 
 import click
 
-from .. import __version__, playbooks
+from .. import __version__
 from ..utils.paths import get_lock_path, get_socket_path
 
 
@@ -679,62 +679,6 @@ def page_download_media(
 def version() -> None:
     """Show version information."""
     click.echo(f"Chrome Agent {__version__}")
-
-
-@cli.command()
-@click.option("--domain", help="URL or hostname to route to a Playbook")
-@click.option("--list", "list_all", is_flag=True, help="List every installed Playbook")
-@click.option(
-    "--dir",
-    "print_directory",
-    is_flag=True,
-    help="Print the site directory instead of its PLAYBOOK.md",
-)
-@click.option("--json", "json_output", is_flag=True, help="Output JSON")
-def playbook(domain: str, list_all: bool, print_directory: bool, json_output: bool) -> None:
-    """Find the Playbook that covers a site."""
-    if not domain and not list_all:
-        click.echo("Give --domain <url-or-host>, or --list for all of them.", err=True)
-        sys.exit(2)
-
-    wanted = ""
-    try:
-        if list_all:
-            found = playbooks.all_playbooks()
-        else:
-            wanted = playbooks.registrable_domain(domain)
-            found = playbooks.match(wanted)
-    except (FileNotFoundError, ValueError) as error:
-        click.echo(str(error), err=True)
-        sys.exit(2)
-
-    if json_output:
-        click.echo(
-            json.dumps(
-                {
-                    "domain": wanted or None,
-                    "playbooks": [
-                        {
-                            "site": entry.site,
-                            "path": str(entry.path),
-                            "directory": str(entry.directory),
-                        }
-                        for entry in found
-                    ],
-                },
-                ensure_ascii=False,
-            )
-        )
-        return
-
-    if found:
-        for entry in found:
-            click.echo(str(entry.directory if print_directory else entry.path))
-    elif list_all:
-        click.echo("No Playbook is installed.")
-    else:
-        click.echo(f"No Playbook covers {wanted}.", err=True)
-        sys.exit(1)
 
 
 def _ping_daemon() -> dict:

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Install Chrome Agent: the runtime, the Native Messaging host, and the skill.
+# Set up Chrome Agent on this machine: the runtime, the Native Messaging host,
+# and the skill link that makes this directory an agent skill.
 #
-# Runs from a checkout. The runtime is built from this tree and installed into a
-# venv, and the skill is linked back to this tree so edits take effect without
-# reinstalling.
+# Run from the checkout, which is also the skill: `chrome_agent/` and
+# `extension/` sit next to this script, so once the directory is linked into an
+# agent's skill directory, the agent that reads SKILL.md can run this itself.
 #
-# The extension is not installed here: it is loaded by hand at
-# chrome://extensions, from extension/.
+# The extension is not installed here: Chrome has no silent install, so the user
+# loads extension/ at chrome://extensions by hand. This script prints which
+# folder to pick and stops there.
 set -euo pipefail
 
 HOST_NAME="com.browseruse.chrome_agent"
@@ -27,16 +29,16 @@ FORCE=0
 
 usage() {
   cat <<'TEXT'
-Usage: ./install.sh [options]
+Usage: ./setup.sh [options]
 
-  --extension-id <id>  use this 32-character ID for the Native Messaging host
-                       instead of the one the manifest key pins
+  --extension-id <id>    use this 32-character ID for the Native Messaging host
+                         instead of the one the manifest key pins
   --skill-dirs "<dirs>"  space-separated skill directories, default
-                       "~/.claude/skills ~/.codex/skills"
-  --uninstall          remove the host manifest, launcher, skill links and CLI
-  --purge              with --uninstall, also delete the virtualenv
-  --force              replace skill directories this script did not create
-  -h, --help           this text
+                         "~/.claude/skills ~/.codex/skills"
+  --force                replace skill directories this script did not create
+  --uninstall            remove the host manifest, launcher, skill links and CLI
+  --purge                with --uninstall, also delete the virtualenv
+  -h, --help             this text
 TEXT
 }
 
@@ -58,7 +60,7 @@ while (($#)); do
 done
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  die "The V1 installer currently supports macOS only."
+  die "Only macOS is supported so far."
 fi
 
 read -r -a SKILL_DIRS <<<"${SKILL_DIRS_OVERRIDE:-$SKILL_DIRS_DEFAULT}"
@@ -70,8 +72,10 @@ if ((UNINSTALL)); then
   fi
   for SKILL_DIR in "${SKILL_DIRS[@]}"; do
     TARGET="$SKILL_DIR/$SKILL_NAME"
-    if [[ -L "$TARGET" || -d "$TARGET" ]]; then
-      rm -rf "$TARGET"
+    # Only links are ours to remove: a real directory here was put there by
+    # someone who did not use this script.
+    if [[ -L "$TARGET" ]]; then
+      rm -f "$TARGET"
     fi
   done
   if ((PURGE)); then
@@ -84,31 +88,24 @@ fi
 
 # ---------------------------------------------------------------- the runtime
 
-if [[ ! -f "$SOURCE_DIR/pyproject.toml" ]]; then
-  die "$SOURCE_DIR has no pyproject.toml; run this from the checkout."
+if [[ ! -f "$SOURCE_DIR/pyproject.toml" || ! -f "$SOURCE_DIR/SKILL.md" ]]; then
+  die "$SOURCE_DIR is not the chrome-agent skill; run this from the checkout."
 fi
 
-BOOTSTRAP_PYTHON="${PYTHON_BIN:-$(command -v python3 || true)}"
-if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
-  die "python3 is required."
+UV="${UV_BIN:-$(command -v uv || true)}"
+if [[ -z "$UV" ]]; then
+  die "uv is required, and it also keeps pip out of the picture:
+  curl -LsSf https://astral.sh/uv/install.sh | sh"
 fi
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  "$BOOTSTRAP_PYTHON" -m venv "$VENV_DIR"
+  "$UV" venv "$VENV_DIR" --quiet
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-WHEEL_DIR="$RUNTIME_DIR/build"
-mkdir -p "$WHEEL_DIR"
-rm -f "$WHEEL_DIR"/chrome_agent-*.whl
-"$VENV_PYTHON" -m pip wheel --quiet --no-deps --wheel-dir "$WHEEL_DIR" "$SOURCE_DIR"
-WHEEL="$(ls -t "$WHEEL_DIR"/chrome_agent-*.whl | head -1)"
-
-# The wheel carries chrome_agent/ only, so its dependencies are resolved here
-# rather than dragged along: repeating an install must not require the network
-# for packages that are already in the venv.
-"$VENV_PYTHON" -m pip install --quiet --force-reinstall --no-deps "$WHEEL"
-"$VENV_PYTHON" -m pip install --quiet click PyYAML
+# Editable: the skill is the checkout, so an edit in the tree must take effect
+# without reinstalling. --reinstall because the wheel is built from this tree.
+"$UV" pip install --quiet --python "$VENV_PYTHON" --reinstall -e "$SOURCE_DIR"
 
 # ------------------------------------------------------------- the extension
 
@@ -139,8 +136,8 @@ mkdir -p "$RUNTIME_DIR" "$HOST_DIR"
 LAUNCHER="$RUNTIME_DIR/launcher.sh"
 cat >"$LAUNCHER" <<TEXT
 #!/bin/sh
-# Written by install.sh. Chrome runs this to reach the daemon; it lives outside
-# the source tree on purpose, so the checkout may be moved or deleted.
+# Written by setup.sh. Chrome runs this to reach the daemon; the interpreter is
+# named absolutely because Chrome does not inherit a shell environment.
 exec "$VENV_PYTHON" -m chrome_agent.native_host.native_host
 TEXT
 chmod 755 "$LAUNCHER"
@@ -169,17 +166,10 @@ PY
 
 # ----------------------------------------------------------------- the skill
 
-SKILL_SOURCE="$SOURCE_DIR/skill/$SKILL_NAME"
-if [[ ! -f "$SKILL_SOURCE/SKILL.md" ]]; then
-  die "$SKILL_SOURCE/SKILL.md is missing."
-fi
-
 for SKILL_DIR in "${SKILL_DIRS[@]}"; do
   mkdir -p "$SKILL_DIR"
   TARGET="$SKILL_DIR/$SKILL_NAME"
   if [[ -L "$TARGET" ]]; then
-    # A symlink here is either ours or a stale one of ours pointing at a path
-    # that no longer exists; both are safe to replace.
     rm -f "$TARGET"
   elif [[ -e "$TARGET" ]]; then
     if grep -q "^name: $SKILL_NAME$" "$TARGET/SKILL.md" 2>/dev/null || ((FORCE)); then
@@ -188,7 +178,7 @@ for SKILL_DIR in "${SKILL_DIRS[@]}"; do
       die "Refusing to replace $TARGET: it is not a $SKILL_NAME skill. Use --force."
     fi
   fi
-  ln -s "$SKILL_SOURCE" "$TARGET"
+  ln -s "$SOURCE_DIR" "$TARGET"
 done
 
 VERSION="$("$VENV_PYTHON" -c 'import chrome_agent; print(chrome_agent.__version__)')"
@@ -226,17 +216,20 @@ if [[ -e "$BIN_DIR/chrome-agent" && ! -L "$BIN_DIR/chrome-agent" ]]; then
 fi
 ln -sfn "$VENV_DIR/bin/chrome-agent" "$BIN_DIR/chrome-agent"
 
-# --------------------------------------------------------------------- done
+# ---------------------------------------------------------------- the manual
 
-echo "Installed Chrome Agent $VERSION."
+echo "Configured Chrome Agent $VERSION."
 echo "  extension ID  $EXTENSION_ID"
 echo "  launcher      $LAUNCHER"
 echo "  host manifest $HOST_DIR/$HOST_NAME.json"
 echo "  skill         ${SKILL_DIRS[*]}"
 echo
-echo "Next:"
-echo "  1. chrome://extensions -> reload the extension; its ID must read $EXTENSION_ID"
+echo "One step left, and it needs the user:"
+echo "  1. chrome://extensions -> Developer mode -> Load unpacked -> $EXTENSION_DIR"
+echo "     The card must then read the ID above; if it does not, the folder picked"
+echo "     was not this one."
 echo "  2. chrome-agent ensure --launch-if-missing --wait-for-extension --json"
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-  echo "  note: add $BIN_DIR to PATH before invoking chrome-agent by name"
+  echo
+  echo "note: $BIN_DIR is not on PATH; invoke $BIN_DIR/chrome-agent or add it."
 fi

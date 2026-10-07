@@ -3,7 +3,7 @@
 import json
 import pathlib
 
-from chrome_agent.utils.extension_id import manifest_extension_id
+from chrome_agent.utils.extension_id import extension_id, manifest_extension_id
 
 
 def test_extension_structure():
@@ -65,3 +65,29 @@ def test_manifest_pins_the_extension_id():
     assert identifier is not None
     assert len(identifier) == 32
     assert set(identifier) <= set("abcdefghijklmnop")
+    # Without the key Chrome would derive the ID from the directory the
+    # extension was loaded from; a pinned ID must not look like one.
+    assert identifier != "ljddnkahpmiaklkfhimhandipjhpknmj"
+
+
+def test_the_id_follows_chromium():
+    """SHA256 of the key, first 16 bytes as hex, then 0-f shifted to a-p.
+
+    The expectations were computed separately (openssl for the digest, an
+    explicit translation table for the alphabet), and the rule as a whole was
+    checked against a real ID: hashing the path of an unpacked extension
+    reproduces the ID Chrome shows for it.
+    """
+    assert extension_id("aGVsbG8=") == "cmpcenlkfplakdaocgoidlckmfljocjo"
+    assert extension_id("Y2hyb21lLWFnZW50") == "jmimmbkgeldngcanlcobhighhmmiligb"
+
+
+def test_unpadded_and_wrapped_keys_decode_alike():
+    assert extension_id("aGVsbG8") == extension_id("aGVs bG8=\n")
+
+
+def test_a_manifest_without_a_key_pins_nothing(tmp_path):
+    keyless = tmp_path / "manifest.json"
+    keyless.write_text('{"manifest_version": 3}', encoding="utf-8")
+
+    assert manifest_extension_id(keyless) is None

@@ -16,7 +16,7 @@ V1 阶段采用 **DOM 优先** 策略：智能体通过稳定的元素引用直�
     - [规划](#规划)
   - [系统架构](#系统架构)
     - [模块职责](#模块职责)
-    - [站点沉淀：Playbook](#站点沉淀playbook)
+    - [站点能力：独立的站点 Skill](#站点能力独立的站点-skill)
   - [安装说明](#安装说明)
     - [安装步骤](#安装步骤)
     - [验证流程](#验证流程)
@@ -41,7 +41,7 @@ V1 阶段采用 **DOM 优先** 策略：智能体通过稳定的元素引用直�
 - **DOM 优先**：用稳定的元素引用（ref）操作页面，截图接口只为第二阶段视觉能力预留。
 - **人工与智能体共用底层**：CLI 是统一入口，调用者既可以是人也可以是智能体。
 - **安全边界明确**：登录、验证码、支付等高风险操作明确交给用户。
-- **通用能力 + 站点沉淀**：跨站通用能力由 CLI / Skill 提供，网站特定流程沉淀在 Playbook。
+- **通用能力 + 站点各管各的**：本仓库只提供跨站的浏览器能力；某个网站怎么采，属于那个网站自己的 skill，放在它自己的项目空间里，通过 CLI 使用这里。
 
 ### 特性
 
@@ -49,7 +49,7 @@ V1 阶段采用 **DOM 优先** 策略：智能体通过稳定的元素引用直�
 - **稳定元素引用**：快照返回 `ref`，配合 `validate` 在页面变化前确认有效性。
 - **懒加载图片发现与下载**：自动触发懒加载，从用户的 Chrome 会话下载到 `Downloads/chrome-agent/`。
 - **站点授权机制**：权限由 Chrome 扩展系统强制执行，daemon 无权绕过。
-- **Playbook 沉淀**：每个网站可沉淀独立的探索流程、状态模型、脚本与契约。
+- **站点能力独立成 skill**：每个网站的探索流程、状态模型、脚本与产出契约放在它自己的 skill 项目里，本仓库不含任何站点内容。
 
 ### 规划
 
@@ -87,9 +87,13 @@ Content Script
 | Chrome 扩展（Service Worker） | 管理标签页、检查站点权限、注入 Content Script、执行截图            |
 | Content Script                | 生成 DOM 快照和元素引用；执行点击、填写、按键、滚动与提取          |
 
-### 站点沉淀：Playbook
+### 站点能力：独立的站点 Skill
 
-Chrome Agent 的通用接口只解决跨站能力，**特定网站的具体流程沉淀在 [`skill/chrome-agent/sites/<site>/`](skill/chrome-agent/sites/)**（参考现有 [`sites/xiaohongshu/`](skill/chrome-agent/sites/xiaohongshu/)），由智能体在跑该网站时读取执行。智能体不用拼路径去找它：`chrome-agent playbook --domain <域名>` 按 skill 的实际安装位置解析出该读哪个 `PLAYBOOK.md`，`--dir` 给出站点目录（脚本就在旁边）。
+本仓库只做跨站的那一半。某个网站怎么采——容器怎么找、滚到哪里算到底、产出什么结构——
+属于那个网站自己的 skill，放在它自己的项目空间里，靠 `description` 被智能体选中，
+内部读它自己的 `PLAYBOOK.md`。它与这里的唯一关系是命令面（见
+[`SKILL.md` §4](SKILL.md)）：调 `chrome-agent` 的 CLI、读 `--json` 输出，
+不 import `chrome_agent`、不依赖本目录的路径。所以本站点仓库里没有、也不该有任何站点名。
 
 ---
 
@@ -97,21 +101,40 @@ Chrome Agent 的通用接口只解决跨站能力，**特定网站的具体流�
 
 ### 安装步骤
 
-1. 打开 `chrome://extensions`，启用开发者模式。
-2. 选择"加载已解压的扩展程序"，加载项目中的 `extension/` 目录。清单里的 `key` 把扩展 ID 固定下来，**不需要再抄 ID**。
-3. 运行安装脚本：
+前置：macOS、已安装 Google Chrome、以及 [`uv`](https://docs.astral.sh/uv/)（没有就
+`curl -LsSf https://astral.sh/uv/install.sh | sh`）。
+
+1. 把这个仓库放到智能体读技能的地方，它本身就是 skill：
 
    ```bash
-   ./install.sh
+   git clone https://github.com/xunushan/browser-use.git ~/.claude/skills/chrome-agent
    ```
 
-   该脚本构建并安装 CLI / daemon / Native Messaging Host，按清单里的 `key` 算出扩展 ID 写进 host 清单，并把 `skill/chrome-agent` 软链到 `~/.claude/skills/` 与 `~/.codex/skills/`。
+2. 运行配置脚本：
 
-4. 回到 `chrome://extensions` 重新加载扩展；脚本会打印应有的扩展 ID，核对一致即可。
+   ```bash
+   ~/.claude/skills/chrome-agent/setup.sh
+   ```
 
-卸载用 `./install.sh --uninstall`（加 `--purge` 连虚拟环境一起删）。
+   它用 `uv` 建 venv 并从本目录可编辑安装运行时（CLI / daemon / Native Messaging Host），
+   按 `extension/manifest.json` 里的 `key` 算出扩展 ID 写进 host 清单，并把本目录软链到
+   `~/.claude/skills/` 与 `~/.codex/skills/`。
 
-小红书已预授权；操作其他网站前，用户需在目标标签页点击 Chrome Agent 图标并授权当前网站。
+3. 打开 `chrome://extensions`，启用开发者模式，选择"加载已解压的扩展程序"，加载
+   `extension/` 目录。**这一步必须由人点**——Chrome 没有静默安装路径。清单里的 `key`
+   把扩展 ID 固定下来，**不需要再抄 ID**：卡片上的 ID 应该与脚本打印的一致。
+
+4. 验证：
+
+   ```bash
+   chrome-agent ensure --launch-if-missing --wait-for-extension --json
+   ```
+
+卸载用 `setup.sh --uninstall`（加 `--purge` 连虚拟环境一起删）；扩展在 `chrome://extensions`
+上移除。完整说明（各文件落在哪、装不上怎么查）见
+[`references/install-and-setup.md`](references/install-and-setup.md)。
+
+除站点自身外，操作任何网站前，用户需在目标标签页点击 Chrome Agent 图标并授权当前网站。
 
 ### 验证流程
 
@@ -134,7 +157,7 @@ chrome-agent ensure \
 在 Chrome 中打开目标网站后执行：
 
 ```bash
-chrome-agent tabs list --domain xiaohongshu.com --json
+chrome-agent tabs list --domain example.com --json
 ```
 
 预期返回当前已登录的目标标签页列表，记录要操作的 `id`。
@@ -228,15 +251,20 @@ chrome-agent page download-media --tab-id <tab-id> --ref <media-ref> --prefix no
 
 ## chrome-agent Skill
 
-[`skill/chrome-agent/`](skill/chrome-agent/) 是智能体侧的全部内容：
+**这个仓库就是 skill**：把它放到技能目录，智能体就能读懂该装什么、怎么装、怎么用。
+所以运行时代码和扩展都在这里，不在别处——
 
-- [`SKILL.md`](skill/chrome-agent/SKILL.md)：工具说明书。只讲通用启动、操作循环、命令能力、路由与安全，不含任何站点内容。
-- [`references/`](skill/chrome-agent/references/)：通用细则（新站点探索规范、媒体与下载、排错），按需加载。
-- [`sites/<site>/`](skill/chrome-agent/sites/)：各站点自己的流程（`PLAYBOOK.md`）、页面语义（`locators.yaml`）、脚本与产出合同。
+- [`SKILL.md`](SKILL.md)：说明书。启动、操作循环、命令面、接口契约、安全交接，不含任何站点内容。
+- [`references/`](references/)：按需加载的细则——[安装与配置](references/install-and-setup.md)、
+  [站点 skill 规范](references/site-exploration-and-playbook-spec.md)、
+  [媒体与下载](references/media-and-downloads.md)、[排错](references/troubleshooting.md)。
+- [`setup.sh`](setup.sh)：一次性配置（uv 建环境、写 host 清单、链好 skill）。
+- [`chrome_agent/`](chrome_agent/)：运行时；[`extension/`](extension/)：Chrome 扩展。
 
-skill 在仓库里开发，`.claude/skills/chrome-agent` 只是指向它的一份本地软链接（`.claude/` 不入库）；安装脚本会把 `skill/chrome-agent` 链接或复制到 `~/.claude/skills/` 与 `~/.codex/skills/`。
+开发时 `.claude/skills/chrome-agent` 是指向本仓库的软链（`.claude/` 不入库），
+`setup.sh` 负责把它换成 `~/.claude/skills/` 与 `~/.codex/skills/`。
 
-新建或更新 Playbook 前请阅读 [`references/site-exploration-and-playbook-spec.md`](skill/chrome-agent/references/site-exploration-and-playbook-spec.md)。
+写新的站点 skill 前请阅读 [`references/site-exploration-and-playbook-spec.md`](references/site-exploration-and-playbook-spec.md)。
 
 ---
 

@@ -1,12 +1,13 @@
 ---
 name: chrome-agent
-description: Control the user's existing signed-in Google Chrome through the local Chrome Agent extension, CLI, daemon, and Native Messaging bridge. Use for browsing, searching, clicking, filling, scrolling, extracting page data, preserving authenticated result links, discovering lazy-loaded images, and downloading page images from the user's current Chrome session.
+description: Install and control the user's existing signed-in Google Chrome through the local Chrome Agent extension, CLI, daemon, and Native Messaging bridge. Use to set the tool up from scratch, and to browse, search, click, fill, scroll, extract page data, preserve authenticated result links, discover lazy-loaded images, and download page media from the user's current Chrome session.
 ---
 
 # Chrome Agent
 
-Drive the user's own signed-in Chrome through the local `chrome-agent` CLI. It is
-generic on purpose: everything specific to one website goes in its Playbook.
+Drive the user's own signed-in Chrome through the local `chrome-agent` CLI. This
+skill is both the installer and the tool manual, and it is generic on purpose:
+what to collect from a given website belongs to that website's own skill.
 
 ## Read on demand
 
@@ -14,18 +15,27 @@ These are the only files in this skill; nothing else needs reading up front.
 
 | What you are about to do | Read this |
 |---|---|
-| Any task | this file — the five sections below are enough to start |
-| The target site already has a Playbook | its `PLAYBOOK.md` (section 4 routes there) |
-| Exploring an unfamiliar site, or creating/updating a Playbook | [references/site-exploration-and-playbook-spec.md](references/site-exploration-and-playbook-spec.md) |
+| Any task | this file — the six sections below are enough to start |
+| `chrome-agent` is missing, the extension is not connected, or access was refused | [references/install-and-setup.md](references/install-and-setup.md) |
+| Exploring an unfamiliar site, or writing a site skill | [references/site-exploration-and-playbook-spec.md](references/site-exploration-and-playbook-spec.md) |
 | Fetching images, video or audio from a page | [references/media-and-downloads.md](references/media-and-downloads.md) |
-| A ref stopped working, the snapshot is missing the target, scrolling does nothing, access was refused, a download failed | [references/troubleshooting.md](references/troubleshooting.md) |
+| A ref stopped working, the snapshot is missing the target, scrolling does nothing, a download failed | [references/troubleshooting.md](references/troubleshooting.md) |
 
-## 1. Start and authorize
+## 0. Install once, if the command is missing
 
 ```bash
 chrome-agent ensure --launch-if-missing --wait-for-extension --timeout 30 --json
-chrome-agent tabs list --json
 ```
+
+If that command does not exist, this skill is not installed yet. This directory
+*is* the skill, and it ships the whole tool: `chrome_agent/` (runtime),
+`extension/` (the Chrome extension), and `setup.sh`. Read
+[references/install-and-setup.md](references/install-and-setup.md) and follow it
+end to end — it runs `setup.sh` and then has the user load `extension/` at
+`chrome://extensions`. That single click is the only step a machine cannot do,
+so do not attempt to install the extension by any other route.
+
+## 1. Start and authorize
 
 Reuse a suitable signed-in tab rather than opening a new one, and claim it before
 operating on it: `chrome-agent tabs claim <tab-id> --json`.
@@ -84,7 +94,6 @@ lists the groups; parameter details are in `<group> <command> --help`.
 
 ```text
 service:  ensure | status | start | stop | version
-routing:  playbook --domain <host> | --list
 tabs:     tabs list | open | claim | activate | navigate
 observe:  page snapshot | extract | text --ref | validate | wait
 act:      page click | fill | keypress | scroll
@@ -96,26 +105,19 @@ Downloads directory, under `chrome-agent/`. Success is `state=complete` **plus**
 a `filename`; a discovered URL means nothing was fetched. Report every completed
 filename and every failed or interrupted item.
 
-## 4. Route to a site Playbook
+## 4. What a site skill may depend on
 
-This skill is the tool manual; a site's own workflow lives in its Playbook.
-Derive the registrable domain from the user's URL or from `tabs list`, then ask
-which Playbook covers it before touching the page:
+A website's own skill lives in its own project space and drives this one through
+the command surface above — nothing else is a contract:
 
-```bash
-chrome-agent playbook --domain <registrable-domain-or-url> [--dir] [--json]
-chrome-agent playbook --list                       # every installed Playbook
-```
+- Call the `chrome-agent` CLI. Do not import `chrome_agent`, and do not build
+  paths into this directory; the skill is installed wherever the agent keeps
+  skills, which is not where it was written.
+- Read `--json` output and its exit codes. Human-readable output is for people.
+- Keep site knowledge on the site's side. Nothing site-specific goes into this
+  skill, its references, or the CLI.
 
-`--dir` prints the site's directory instead of its `PLAYBOOK.md`, and the site's
-scripts sit in it, so run them from there. The lookup resolves against wherever
-this skill is installed, so a checkout and an installed skill answer alike, and
-nothing covering the domain exits non-zero.
-
-If one matches, read it completely and follow it before touching the site. A
-Playbook carries reusable workflow and rules, not stale locators: resolve every
-ref again from the current snapshot. Nothing matching means you explore the site
-and write one, per the spec in the table above.
+Writing one from scratch is covered by the exploration spec in the table above.
 
 ## 5. Safety and handoff
 
