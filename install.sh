@@ -27,13 +27,12 @@ PYTHON_BIN="$VENV_DIR/bin/python"
 LAUNCHER_PATH="$PROJECT_DIR/chrome_agent/native_host/launcher.sh"
 HOST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 HOST_MANIFEST="$HOST_DIR/$HOST_NAME.json"
-SKILL_SOURCE="$PROJECT_DIR/.agents/skills/chrome-agent"
-SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-SKILL_TARGET="$SKILL_DIR/chrome-agent"
+SKILL_SOURCE="$PROJECT_DIR/.claude/skills/chrome-agent"
+SKILL_DIRS=("$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills")
 BIN_DIR="$HOME/.local/bin"
 CLI_TARGET="$BIN_DIR/chrome-agent"
 
-mkdir -p "$HOST_DIR" "$SKILL_DIR" "$BIN_DIR"
+mkdir -p "$HOST_DIR" "$BIN_DIR" "${SKILL_DIRS[@]}"
 
 python3 - "$LAUNCHER_PATH" "$PYTHON_BIN" "$PROJECT_DIR" <<'PY'
 import os
@@ -65,18 +64,21 @@ manifest = {
 Path(path).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
-if [[ -L "$SKILL_TARGET" ]]; then
-  current_target="$(readlink "$SKILL_TARGET")"
-  if [[ "$current_target" != "$SKILL_SOURCE" ]]; then
-    echo "Refusing to replace existing skill symlink: $SKILL_TARGET -> $current_target" >&2
+for SKILL_DIR in "${SKILL_DIRS[@]}"; do
+  SKILL_TARGET="$SKILL_DIR/chrome-agent"
+  if [[ -L "$SKILL_TARGET" ]]; then
+    current_target="$(readlink "$SKILL_TARGET")"
+    if [[ "$current_target" != "$SKILL_SOURCE" ]]; then
+      echo "Refusing to replace existing skill symlink: $SKILL_TARGET -> $current_target" >&2
+      exit 3
+    fi
+  elif [[ -e "$SKILL_TARGET" ]]; then
+    echo "Refusing to replace existing skill: $SKILL_TARGET" >&2
     exit 3
+  else
+    ln -s "$SKILL_SOURCE" "$SKILL_TARGET"
   fi
-elif [[ -e "$SKILL_TARGET" ]]; then
-  echo "Refusing to replace existing skill: $SKILL_TARGET" >&2
-  exit 3
-else
-  ln -s "$SKILL_SOURCE" "$SKILL_TARGET"
-fi
+done
 
 if [[ -e "$CLI_TARGET" && ! -L "$CLI_TARGET" ]]; then
   echo "Refusing to replace existing CLI: $CLI_TARGET" >&2

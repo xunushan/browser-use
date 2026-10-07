@@ -400,7 +400,7 @@ async function unregisterContentScript(params) {
 
 // Page interaction functions
 async function pageSnapshot(params) {
-  const { tabId, scope } = params;
+  const { tabId, scope, limit } = params;
 
   // Ensure content script is injected
   const injectResult = await injectContentScript({ tabId });
@@ -408,10 +408,11 @@ async function pageSnapshot(params) {
     return injectResult;
   }
 
-  // Send message to content script
+  // Send message to content script. `limit` is passed through only when asked
+  // for, so the content script's own default stays the single source of truth.
   const response = await chrome.tabs.sendMessage(tabId, {
     action: "snapshot",
-    params: { scope: scope || "viewport" },
+    params: limit === undefined ? { scope: scope || "viewport" } : { scope: scope || "viewport", limit },
   });
 
   // Update document ID tracking

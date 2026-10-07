@@ -1,4 +1,0 @@
-interface:
-  display_name: "Chrome Agent"
-  short_description: "Control the user’s signed-in Chrome with the local Chrome Agent."
-  default_prompt: "Use Chrome Agent to operate my current signed-in Chrome safely and return evidence-backed results."

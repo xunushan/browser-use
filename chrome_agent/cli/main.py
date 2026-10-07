@@ -276,16 +276,25 @@ def page():
 @page.command("snapshot")
 @click.option("--tab-id", type=int, required=True, help="Tab ID")
 @click.option("--scope", default="viewport", help="Snapshot scope (viewport/full/element)")
+@click.option(
+    "--limit",
+    type=int,
+    default=500,
+    help="Maximum elements to return; 0 means no limit. One dense list row is "
+    "~20 elements, so the default covers about 22 rows.",
+)
 @click.option("--json", "json_output", is_flag=True, help="Output JSON")
-def page_snapshot(tab_id: int, scope: str, json_output: bool) -> None:
+def page_snapshot(tab_id: int, scope: str, limit: int, json_output: bool) -> None:
     """Take a DOM snapshot."""
     try:
-        result = _send_command("page.snapshot", {"tabId": tab_id, "scope": scope})
+        result = _send_command(
+            "page.snapshot", {"tabId": tab_id, "scope": scope, "limit": limit}
+        )
 
         if json_output:
             click.echo(json.dumps(result))
         else:
-            click.echo(f"Snapshot of tab {tab_id} (scope: {scope})")
+            click.echo(f"Snapshot of tab {tab_id} (scope: {scope}, limit: {limit})")
             if "elements" in result:
                 click.echo(f"Found {len(result['elements'])} elements")
     except Exception as e:

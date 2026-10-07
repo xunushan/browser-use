@@ -105,7 +105,7 @@ Chrome Agent 的通用接口只解决跨站能力，**特定网站的具体流�
    ./install.sh <扩展ID>
    ```
 
-   该脚本一次性安装 CLI / daemon / Native Messaging Host，并把 `.agents/skills/chrome-agent` 链接到 Codex skills 目录。
+   该脚本一次性安装 CLI / daemon / Native Messaging Host，并把 `.claude/skills/chrome-agent` 链接到 `~/.claude/skills/` 与 `~/.codex/skills/`。
 
 4. 在 `chrome://extensions` 重新加载扩展。
 
@@ -226,11 +226,11 @@ chrome-agent page download-media --tab-id <tab-id> --ref <media-ref> --prefix no
 
 ## chrome-agent Skill
 
-`.agents/skills/chrome-agent/` 是智能体侧的入口文件，告诉智能体如何组合 CLI 完成常见任务（浏览、搜索、点击、填写、滚动、提取、下载）。
+`.claude/skills/chrome-agent/` 是智能体侧的入口文件，告诉智能体如何组合 CLI 完成常见任务（浏览、搜索、点击、填写、滚动、提取、下载）。
 
 智能体在接手浏览器自动化任务时应自动加载该 Skill；处理特定网站时再加载对应的 [`playbooks/<site>/`](playbooks/)。
 
-完整内容见 [`.agents/skills/chrome-agent/SKILL.md`](.agents/skills/chrome-agent/SKILL.md)；新建或更新 Playbook 前请阅读 [`.agents/skills/chrome-agent/references/site-exploration-and-playbook-spec.md`](.agents/skills/chrome-agent/references/site-exploration-and-playbook-spec.md)。
+完整内容见 [`.claude/skills/chrome-agent/SKILL.md`](.claude/skills/chrome-agent/SKILL.md)；新建或更新 Playbook 前请阅读 [`.claude/skills/chrome-agent/references/site-exploration-and-playbook-spec.md`](.claude/skills/chrome-agent/references/site-exploration-and-playbook-spec.md)。
 
 ---
 

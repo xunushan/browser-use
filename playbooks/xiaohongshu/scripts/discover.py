@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from urllib.parse import parse_qs, urlparse
 
 from runtime import (
+    chrome_agent,
     contains_rect,
     find_all,
     find_first,
@@ -24,20 +24,29 @@ DETAIL_CLOSE_TIMEOUT = 6.0
 NOTE_OPEN_TIMEOUT = 15.0
 
 
-def chrome_agent(*args: str) -> dict:
-    result = subprocess.run(
-        ["chrome-agent", *args, "--json"], capture_output=True, text=True, check=False
-    )
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-    payload = json.loads(result.stdout)
-    if payload.get("error"):
-        raise RuntimeError(payload["error"])
-    return payload
-
-
 def snapshot(tab_id: int) -> dict:
     return chrome_agent("page", "snapshot", "--tab-id", str(tab_id), "--scope", "full")
+
+
+def activate_tab(tab_id: int) -> bool:
+    """Bring the tab to the foreground, which the note's lazy loading requires.
+
+    Chrome throttles background tabs' event loop, and Xiaohongshu appends the
+    next batch of comments from that loop. Measured on a 610-comment note: while
+    the tab sat behind another one, scrolling to the very bottom loaded nothing
+    for a full minute (container rows stuck at 40, maxScrollY 7092); activating
+    the tab and scrolling again grew it 40 -> 60 -> 80 -> 100 rows and
+    maxScrollY 7092 -> 10521 -> 13523. Without this the thread silently stops at
+    its first page however large `snapshot_limit` is.
+
+    Returns whether the tab ended up active; a caller that cannot activate the
+    tab is not stopped, it just will not see the thread grow.
+    """
+    try:
+        result = chrome_agent("tabs", "activate", str(tab_id))
+    except RuntimeError:
+        return False
+    return bool(result.get("active"))
 
 
 def discover(page: dict, config: dict, limit: int) -> list[dict]:
@@ -123,7 +132,10 @@ def close_detail_if_open(tab_id: int, config: dict) -> str | None:
         target = find_open_detail(snapshot(tab_id), config)
         if not target:
             return "already-closed"  # dismissed as a side effect of the click
-        chrome_agent("page", "keypress", "--tab-id", str(tab_id), "--ref", target["ref"], "--keys", keys)
+        chrome_agent(
+            "page", "keypress", "--tab-id", str(tab_id), "--ref", target["ref"],
+            "--keys", keys,
+        )
         if wait_for_detail_closed(tab_id, config):
             return f"keypress:{keys}"
 
@@ -156,6 +168,7 @@ def open_result(tab_id: int, selected: dict, mode: str, config: dict) -> dict:
     if not want:
         raise RuntimeError(f"无法从 href 解析笔记 ID: {selected.get('href')}")
 
+    activate_tab(tab_id)
     attempts = []
     for attempt_mode in [mode] + (["navigate"] if mode != "navigate" else []):
         if attempt_mode == "click":

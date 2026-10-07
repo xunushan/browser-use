@@ -231,16 +231,23 @@
     };
   }
 
+  // The snapshot is shipped to the CLI as JSON, so it is capped. One dense row
+  // of a site's list — a Xiaohongshu comment, for instance — is around 20
+  // elements (author, avatar, body, like, date, its own menu), which puts the
+  // default ceiling at roughly 22 rows. Callers that need the tail of a long
+  // list pass a bigger limit; 0 means no cap.
+  const SNAPSHOT_DEFAULT_LIMIT = 500;
+
   /**
    * Build DOM snapshot
    */
-  function buildSnapshot(scope = 'viewport') {
+  function buildSnapshot(scope = 'viewport', element = null, limit = SNAPSHOT_DEFAULT_LIMIT) {
     const elements = [];
     let allElements;
 
-    if (scope === 'element' && arguments[1]) {
+    if (scope === 'element' && element) {
       // Element scope - snapshot specific element
-      allElements = [arguments[1]];
+      allElements = [element];
     } else {
       // Viewport or full scope
       allElements = document.querySelectorAll('*');
@@ -280,6 +287,8 @@
       return a.rect.y - b.rect.y;
     });
 
+    const capped = limit > 0 ? elements.slice(0, limit) : elements;
+
     return {
       documentId: DOCUMENT_ID,
       url: window.location.href,
@@ -292,10 +301,12 @@
         devicePixelRatio: window.devicePixelRatio || 1,
         pageZoom: window.visualViewport?.scale || 1,
       },
-      elements: elements.slice(0, 500), // Limit to 500 elements
+      elements: capped,
       timestamp: new Date().toISOString(),
       scope: scope,
-      truncated: elements.length > 500,
+      limit: limit,
+      matched: elements.length,
+      truncated: capped.length < elements.length,
     };
   }
 
@@ -949,7 +960,11 @@
         break;
 
       case 'snapshot':
-        const snapshot = buildSnapshot(params?.scope || 'viewport');
+        const snapshot = buildSnapshot(
+          params?.scope || 'viewport',
+          null,
+          params?.limit ?? SNAPSHOT_DEFAULT_LIMIT
+        );
         sendResponse(snapshot);
         break;
 

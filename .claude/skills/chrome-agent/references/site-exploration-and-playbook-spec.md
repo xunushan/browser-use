@@ -9,10 +9,10 @@
 1. `ensure → tabs list/claim → full snapshot` 建立页面基线。
 2. 探索搜索、结果、详情打开方式及完整 href；禁止删除 token、签名、来源和过期参数。
 3. 识别最窄的标题、正文、媒体、评论容器以及背景/推荐排除区域。
-4. 验证实际滚动容器、懒加载、虚拟轮播、展开回复和媒体资源形态。
+4. 验证实际滚动容器、懒加载、虚拟化列表、展开回复和媒体资源形态。
 5. 覆盖未登录、验证码、App-only、访问限制、ref 过期、URL 过期和下载失败。
 6. 用可观察状态验证每一步；命令返回不等于业务完成。
-7. 保存脱敏页面形态和失败证据，不保存 Cookie、密码、OTP 或真实短期 token。
+7. 记录关键观测与失败证据（放进该站点的 PLAYBOOK），不保存 Cookie、密码、OTP 或真实短期 token。
 
 ## 工具分工
 
@@ -30,18 +30,17 @@
 ```text
 playbooks/<site>/
   PLAYBOOK.md
+  locators.yaml
   scripts/
     collect.py
   schemas/
     output.schema.json
-  fixtures/
-    sanitized-page-shapes.json
 ```
 
-- `PLAYBOOK.md`：页面状态机、语义识别、标准工作流、完成条件、恢复与限制。
+- `PLAYBOOK.md`：页面状态机、语义识别、标准工作流、完成条件、失败恢复与已知限制，附关键观测的证据。
+- `locators.yaml`：页面语义规则（选择器、作用域、阈值）。脚本读它，不内联站点选择器。
 - `scripts/`：智能体确定本次 tab/ref 后执行的确定性 CLI 编排、去重、解析和格式化。
-- `schemas/`：稳定输出合同。
-- `fixtures/`：脱敏回归形态；可选。
+- `schemas/`：产出文件的结构合同，与脚本的产出逐字段对应。
 
 ## Playbook 必备章节
 

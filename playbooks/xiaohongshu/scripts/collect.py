@@ -1,216 +1,130 @@
 #!/usr/bin/env python3
-"""Collect one open Xiaohongshu note using refs resolved by an agent."""
+"""Collect one open Xiaohongshu note into its three output files.
+
+The orchestrator, and nothing more: page semantics live in `locators.yaml`,
+reading lives in `note.py` / `comments.py` / `media.py`, and the CLI below wires
+them to the command line.
+
+Per note directory:
+
+* `note.json`     — the note itself, shaped for an agent to read;
+* `comments.json` — the thread, plus how complete the read is known to be;
+* `downloads.json` — what was discovered and downloaded, for verification.
+"""
 
 from __future__ import annotations
 
 import argparse
-import json
-import re
-import shutil
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from runtime import find_first, load_locators, should_stop_scroll
+from comments import collect_comments, recapture_comments, write_comments
+from media import collect_media, failed_downloads, write_downloads
+from note import read_content, read_meta, write_note
+from runtime import comment_snapshot_limit, load_locators, snapshot, tab_source
+
+NOTE_FILENAME = "note.json"
+DOWNLOADS_FILENAME = "downloads.json"
+SCHEMA_VERSION = 2
 
 
-def chrome_agent(*args: str) -> dict:
-    result = subprocess.run(
-        ["chrome-agent", *args, "--json"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-    payload = json.loads(result.stdout)
-    if payload.get("error"):
-        raise RuntimeError(payload["error"])
-    return payload
+def collect_note(
+    tab_id: int,
+    *,
+    note_dir: Path,
+    output_path: Path,
+    comment_limit: int | None = None,
+    fallbacks: dict[str, str | None] | None = None,
+    download_images: bool = False,
+    download_media: bool = False,
+    prefix: str = "xiaohongshu-note",
+    with_comments: bool = True,
+    comment_scrolls: int | None = None,
+) -> dict:
+    """Collect the note currently open in `tab_id` and write its files.
 
+    Shared by the CLI and the unattended batch runner so both resolve refs,
+    scroll comments and download media through exactly one code path.
 
-def tab_source(tab_id: int) -> dict:
-    tabs = chrome_agent("tabs", "list").get("tabs", [])
-    tab = next((item for item in tabs if item.get("id") == tab_id), None)
-    if not tab:
-        raise RuntimeError(f"Tab not found: {tab_id}")
-    return {"tabId": tab_id, "url": tab.get("url", ""), "title": tab.get("title")}
-
-
-def deduplicate(items: list[dict], key: str = "url") -> list[dict]:
-    output = []
-    seen = set()
-    for item in items:
-        value = item.get(key)
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        output.append(item)
-    return output
-
-
-def extract_text(tab_id: int, ref: str | None, max_chars: int) -> dict:
-    if not ref:
-        return {"text": "", "length": 0, "truncated": False}
-    result = chrome_agent(
-        "page",
-        "text",
-        "--tab-id",
-        str(tab_id),
-        "--ref",
-        ref,
-        "--max-chars",
-        str(max_chars),
-    )
-    return {
-        "text": result.get("text", ""),
-        "length": int(result.get("length", 0)),
-        "truncated": bool(result.get("truncated")),
-    }
-
-
-def snapshot(tab_id: int) -> dict:
-    return chrome_agent("page", "snapshot", "--tab-id", str(tab_id), "--scope", "full")
-
-
-def load_comments(
-    tab_id: int, config: dict, max_steps: int, fallback_ref: str | None
-) -> tuple[str | None, list[str]]:
-    """Scroll the configured note scroller until a configured rule says stop.
-
-    The stop rules come from `locators.yaml`; see `runtime.should_stop_scroll`.
-    Comments mount lazily, so the container is re-resolved after every step.
+    Every note-level ref — body, media, metadata — is resolved from ONE snapshot
+    taken right after the note opens, because the comment thread is read next
+    and brings thousands of elements with it. The snapshot keeps the first N
+    elements in on-screen order (content.js `buildSnapshot`), so what a long
+    thread pushes past the ceiling is whatever sits further down that order:
+    measured on note 6a6df219, a snapshot taken with the thread scrolled to its
+    end returned y ∈ [-12073, -7956] at `--limit 500`, which still held the note
+    body (y=-12037) but no longer held the carousel at y=32.
     """
+    fallbacks = dict(fallbacks or {})
+    config = load_locators()
+    if comment_limit is None:
+        comment_limit = config["scroll"]["comments"].get("limit", 10)
+    if comment_scrolls is not None:
+        config["scroll"]["comments"]["max_steps"] = comment_scrolls
+
+    opening = snapshot(tab_id, comment_snapshot_limit(config))
     warnings: list[str] = []
-    rules = config["detail"]
-    scroll_config = config["scroll"]["comments"]
-    stop_when = scroll_config.get("stop_when") or ["moved_false"]
-    comments_ref: str | None = None
-    stopped_by: str | None = None
-    previous_step: dict | None = None
-    steps = 0
-    for steps in range(1, max_steps + 1):
-        page = snapshot(tab_id)
-        comments = find_first(page, rules["comments"])
-        if comments:
-            comments_ref = comments["ref"]
-        target = find_first(page, rules["comments_scroll_target"])
-        if not target:
-            # Some layouts render the whole thread at once with no scroll
-            # container. That is only a problem when nothing mounted yet.
-            if not comments:
-                warnings.append("未找到评论滚动容器，无法触发评论懒加载")
-            stopped_by = "no_scroll_target"
-            break
-        step = chrome_agent(
-            "page",
-            "scroll",
-            "--tab-id",
-            str(tab_id),
-            "--ref",
-            target["ref"],
-            "--dy",
-            str(scroll_config["dy"]),
-        )
-        stopped_by = should_stop_scroll(stop_when, step, previous_step)
-        if stopped_by:
-            break
-        previous_step = step
-    final_comments = find_first(snapshot(tab_id), rules["comments"])
-    if final_comments:
-        comments_ref = final_comments["ref"]
-    if not comments_ref:
-        comments_ref = fallback_ref
-    if stopped_by is None and max_steps:
-        warnings.append(f"评论滚动达到上限 {steps} 步，当前评论可能不完整")
-    if not comments_ref:
-        warnings.append("评论容器未在滚动终止前出现")
-    return comments_ref, warnings
 
-
-def resolve_refs(
-    page: dict, config: dict, fallbacks: dict[str, str | None]
-) -> dict[str, str | None]:
-    """Resolve several refs against one snapshot, keeping explicit fallbacks."""
-    resolved = {}
-    for name, fallback in fallbacks.items():
-        element = find_first(page, config["detail"][name])
-        resolved[name] = element["ref"] if element else fallback
-    return resolved
-
-
-def comment_items(text: str) -> list[dict]:
-    """Convert the visible Xiaohongshu comment stream into comment records.
-
-    `innerText` interleaves each comment with time/place, like counts and reply
-    controls. A time line terminates the preceding author/body pair. The raw
-    stream is retained separately because collapsed replies are not available.
-    """
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    time_or_place = re.compile(
-        r"^(?:\d+\s*(?:秒|分钟|分|小时|天)前|\d{4}-\d{2}-\d{2}|\d{2}-\d{2}).*$"
+    content, content_truncated = read_content(
+        tab_id, opening, config, fallbacks.get("body")
     )
-    ui_text = re.compile(r"^(?:共\s*\d+\s*条评论|赞|回复|作者|展开\s*\d+\s*条回复|\d+)$")
-    records: list[dict] = []
-    pending: list[str] = []
+    if content_truncated:
+        warnings.append("正文达到采集上限，可能不完整")
+    meta = read_meta(opening, config)
 
-    def flush() -> None:
-        nonlocal pending
-        meaningful = [line for line in pending if not ui_text.fullmatch(line)]
-        pending = []
-        if len(meaningful) < 2:
-            return
-        records.append({
-            "index": len(records) + 1,
-            "author": meaningful[0],
-            "text": "\n".join(meaningful[1:]),
-        })
+    media = collect_media(
+        tab_id,
+        opening,
+        config,
+        note_dir=note_dir,
+        prefix=prefix,
+        download_images=download_images,
+        download_media=download_media,
+        fallbacks=fallbacks,
+    )
+    warnings.extend(media["warnings"])
+    # A failed download is a result the reader has to see; the per-item detail —
+    # URL, state, filename — is in downloads.json.
+    for item in failed_downloads(media["downloads"]):
+        warnings.append(f"下载未完成：state={item.get('state')} {item.get('url', '')[:120]}")
 
-    for line in lines:
-        if time_or_place.fullmatch(line):
-            flush()
-        elif not ui_text.fullmatch(line):
-            pending.append(line)
-    flush()
-    return records
+    comments: dict | None = None
+    comment_warnings: list[str] = []
+    if with_comments:
+        comments, comment_warnings = collect_comments(
+            tab_id, config, max(0, comment_limit), fallbacks.get("comments")
+        )
 
-
-def is_note_image(image: dict) -> bool:
-    """Exclude small UI assets/emoji while keeping Xiaohongshu note image variants."""
-    url = image.get("src", "")
-    width = image.get("width") or 0
-    height = image.get("height") or 0
-    if "notes_pre_post/" in url:
-        return True
-    if re.search(r"/1040g[0-9a-z]+", url, re.I) and max(width, height) > 300:
-        return True
-    return max(width, height) > 480
-
-
-def unique_destination(directory: Path, filename: str) -> Path:
-    candidate = directory / filename
-    stem, suffix = candidate.stem, candidate.suffix
-    index = 2
-    while candidate.exists():
-        candidate = directory / f"{stem}-{index}{suffix}"
-        index += 1
-    return candidate
-
-
-def organize_downloads(downloads: list[dict], directory: Path, warnings: list[str]) -> None:
-    """Move only files confirmed as downloaded in this collection run."""
-    directory.mkdir(parents=True, exist_ok=True)
-    for item in downloads:
-        if item.get("state") != "complete" or not item.get("filename"):
-            continue
-        source = Path(item["filename"])
-        if not source.is_file():
-            warnings.append(f"下载完成但找不到文件，未归档：{source}")
-            continue
-        destination = unique_destination(directory, source.name)
-        shutil.move(str(source), destination)
-        item["originalFilename"] = str(source)
-        item["filename"] = str(destination)
+    captured_at = datetime.now(timezone.utc).isoformat()
+    note = {
+        "schemaVersion": SCHEMA_VERSION,
+        "capturedAt": captured_at,
+        **meta,
+        "content": content,
+        "warnings": warnings,
+    }
+    write_note(output_path, note)
+    write_downloads(
+        note_dir / DOWNLOADS_FILENAME,
+        {
+            "schemaVersion": SCHEMA_VERSION,
+            "capturedAt": captured_at,
+            "source": tab_source(tab_id),
+            "content": {"length": len(content), "truncated": content_truncated},
+            "images": media["images"],
+            "audioVideo": media["audioVideo"],
+            "downloads": media["downloads"],
+            "warnings": media["warnings"],
+        },
+    )
+    if comments is not None:
+        write_comments(
+            output_path,
+            note_id_value=meta["noteId"] or note_dir.name,
+            comments=comments,
+            warnings=comment_warnings,
+        )
+    return note
 
 
 def main() -> int:
@@ -231,6 +145,24 @@ def main() -> int:
     parser.add_argument(
         "--comment-scrolls", type=int, help="Override locators.yaml comment scroll limit"
     )
+    parser.add_argument(
+        "--comments",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to read the comment thread at all (default: yes)",
+    )
+    parser.add_argument(
+        "--comment-limit",
+        type=int,
+        help="Top-level comments to read; a comment and its replies count as one. "
+        "Defaults to locators.yaml scroll.comments.limit (10)",
+    )
+    parser.add_argument(
+        "--comments-only",
+        action="store_true",
+        help="Refresh only the comment section of an existing note.json, "
+        "leaving already-downloaded media untouched",
+    )
     parser.add_argument("--download-images", action="store_true")
     parser.add_argument("--download-media", action="store_true")
     parser.add_argument("--prefix", default="xiaohongshu-note")
@@ -244,121 +176,36 @@ def main() -> int:
     args = parser.parse_args()
 
     note_dir = args.output_dir or args.output.parent
-    output_path = (args.output_dir / "note.json") if args.output_dir else args.output
+    output_path = (args.output_dir / NOTE_FILENAME) if args.output_dir else args.output
 
-    config = load_locators()
-    configured_limit = config["scroll"]["comments"]["max_steps"]
-    requested_limit = args.comment_scrolls
-    comment_limit = max(0, requested_limit if requested_limit is not None else configured_limit)
-    comments_ref, warnings = load_comments(
-        args.tab_id, config, comment_limit, args.comments_ref
-    )
-    resolved = resolve_refs(
-        snapshot(args.tab_id),
-        config,
-        {
+    if args.comments_only:
+        recapture_comments(
+            args.tab_id,
+            output_path=output_path,
+            comment_limit=args.comment_limit,
+            fallback=args.comments_ref,
+            comment_scrolls=args.comment_scrolls,
+        )
+        print(output_path)
+        return 0
+
+    collect_note(
+        args.tab_id,
+        note_dir=note_dir,
+        output_path=output_path,
+        comment_limit=args.comment_limit,
+        fallbacks={
             "body": args.body_ref,
+            "comments": args.comments_ref,
             "image_media": args.images_ref,
             "video_media": args.media_ref,
         },
+        download_images=args.download_images,
+        download_media=args.download_media,
+        prefix=args.prefix,
+        with_comments=args.comments,
+        comment_scrolls=args.comment_scrolls,
     )
-    body_ref = resolved["body"]
-    images_ref = resolved["image_media"]
-    media_ref = resolved["video_media"]
-    if not body_ref:
-        raise RuntimeError("未从 locators.yaml 或 --body-ref 找到正文容器")
-
-    content = extract_text(args.tab_id, body_ref, 20000)
-    comments_text = extract_text(args.tab_id, comments_ref, 100000)
-    if content["truncated"]:
-        warnings.append("正文达到采集上限，可能不完整")
-    if comments_ref:
-        warnings.append("评论仅包含当前 Web 页面已加载和已展开的范围")
-
-    images = []
-    if images_ref:
-        discovered_images = deduplicate(
-            chrome_agent(
-                "page",
-                "images",
-                "--tab-id",
-                str(args.tab_id),
-                "--ref",
-                images_ref,
-                "--load",
-            ).get("images", [])
-        )
-        images = [image for image in discovered_images if is_note_image(image)]
-        if discovered_images and not images:
-            warnings.append("未识别出笔记原图，已拒绝下载小图/表情/页面资源")
-
-    audio_video = []
-    if media_ref:
-        scoped_media = chrome_agent(
-            "page", "media", "--tab-id", str(args.tab_id), "--ref", media_ref
-        ).get("media", [])
-        page_media = chrome_agent("page", "media", "--tab-id", str(args.tab_id)).get(
-            "media", []
-        )
-        audio_video = deduplicate(scoped_media + page_media)
-
-    downloads = []
-    if args.download_images and images_ref:
-        command = [
-            "page", "download-images", "--tab-id", str(args.tab_id), "--ref", images_ref,
-            "--prefix", args.prefix,
-        ]
-        for image in images:
-            command.extend(["--url", image["src"]])
-        result = chrome_agent(*command)
-        image_downloads = result.get("downloads", [])
-        organize_downloads(image_downloads, note_dir / "images", warnings)
-        downloads.extend(image_downloads)
-        if result.get("requested", 0) == 0:
-            warnings.append("未下载图片：请重新确认图片容器是详情轮播，而非整张笔记或评论容器")
-        if not images:
-            images = [
-                {"src": item["url"], "source": "download-discovery"}
-                for item in result.get("downloads", [])
-                if item.get("url")
-            ]
-    if args.download_media and media_ref:
-        result = chrome_agent(
-            "page",
-            "download-media",
-            "--tab-id",
-            str(args.tab_id),
-            "--prefix",
-            args.prefix,
-            "--timeout",
-            "600",
-        )
-        media_downloads = result.get("downloads", [])
-        organize_downloads(media_downloads, note_dir / "videos", warnings)
-        downloads.extend(media_downloads)
-        if result.get("unsupported"):
-            warnings.append("存在当前无法直接下载的 blob/HLS/DASH/unsupported 媒体")
-
-    output = {
-        "schemaVersion": 1,
-        "capturedAt": datetime.now(timezone.utc).isoformat(),
-        "source": tab_source(args.tab_id),
-        "content": content,
-        "comments": {
-            "rawText": comments_text["text"],
-            "items": comment_items(comments_text["text"]),
-            "scope": "currently-loaded" if comments_ref else "none",
-            "possiblyIncomplete": bool(comments_ref),
-        },
-        "media": {
-            "images": images,
-            "audioVideo": audio_video,
-            "downloads": downloads,
-        },
-        "warnings": warnings,
-    }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n")
     print(output_path)
     return 0
 

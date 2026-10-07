@@ -2,150 +2,171 @@
 
 适用站点：`xiaohongshu.com`（包括其子域名）
 
-这是智能体下载小红书笔记时的唯一站点入口。执行前先阅读本文件；探索新网站时阅读 Chrome Agent Skill 引用的 `references/site-exploration-and-playbook-spec.md`。
+这是智能体的唯一站点入口：站点专属的容器、参数和踩坑只写在这里，`chrome-agent` Skill 与其 `references/` 里不含任何本站内容。第 1 节按顺序照跑即可完成一次采集；第 2 节是每条规则背后的证据，出问题时回来查；第 3 节说明各文件职责。
 
-## 目标与非目标
+## 1. 完整流程
 
-使用当前已登录 Chrome 搜索小红书，处理首页结果中的可访问笔记，提取正文、当前已加载评论，并下载目标图片或 direct 视频。不得绕过 App-only、验证码、风控、登录和内容保护。
+### 0. 前置
 
-## 页面状态模型
+```bash
+chrome-agent ensure --launch-if-missing --wait-for-extension --timeout 30 --json
+chrome-agent tabs list --json           # 挑一个已登录小红书的标签页
+chrome-agent tabs claim <tab-id> --json
+chrome-agent tabs activate <tab-id> --json   # 采评论必须在前台，见 2.2
+```
+
+### 1. 在搜索结果页发现候选
+
+先把目标 tab 导航到 `https://www.xiaohongshu.com/search_result?keyword=<关键词>&source=web_search_result_notes&type=51`，然后：
+
+```bash
+python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10
+```
+
+判据：输出里有 rank/ref/title/noteId/href，且 href 带 `xsec_token`。当前页不是搜索结果页时脚本报错并打印实际 URL，而不是返回空列表。
+
+### 2. 打开一条并核验落点
+
+```bash
+python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10 --open-rank 1
+python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10 --open-rank 1 --open-mode navigate
+```
+
+判据：返回被核验过的 `noteId`（等于目标）与所用 `mode`。脚本会先关掉上一条留下的详情遮罩，点完轮询 URL 与详情标记（`detail.open_markers`），只有确认落在目标笔记上才算成功；点不中自动退回 `navigate`，两条路都不中则报错退出——**不要**在报错后沿用当前页面继续采集。
+
+### 3. 采集这一条
+
+```bash
+# 图文
+python playbooks/xiaohongshu/scripts/collect.py --tab-id <tab-id> \
+  --download-images --prefix <note-id> --output-dir outputs/xiaohongshu/<note-id>
+
+# 视频
+python playbooks/xiaohongshu/scripts/collect.py --tab-id <tab-id> \
+  --download-media --prefix <note-id> --output-dir outputs/xiaohongshu/<note-id>
+```
+
+脚本从**当次** snapshot 按 `locators.yaml` 自行解析正文、媒体和评论容器，命令行 ref 只在规则失配时作备用回退。评论预算用 `--comment-limit`（顶层评论条数，一条评论连同它的回复算 1；不传则用 `locators.yaml` 的 `scroll.comments.limit`）。`--comments-only` 只重采评论，不动已下载的媒体。
+
+判据：命令输出 note.json 路径；打开目录看三个文件（见下）。**下载成功只看 `state=complete` + `filename`，发现 URL 不等于下载完成。**
+
+### 4. 批量与补采
+
+```bash
+python playbooks/xiaohongshu/scripts/batch.py \
+  --tab-id <tab-id> --plan <笔记清单.json> --output-root <输出根目录> \
+  --interval 15
+
+# 已有 note.json 的笔记，只补评论
+python playbooks/xiaohongshu/scripts/batch.py \
+  --tab-id <tab-id> --plan <笔记清单.json> --output-root <输出根目录> --comments-only
+```
+
+清单是 `{noteId, url, keywords[]}` 数组。脚本先用 `url` 导航（打不开时按 `keywords` 回搜索页重新发现并点击），逐条完成后再隔 `--interval` 秒走下一条。`--only`/`--limit`/`--skip-existing` 用于续跑；单条失败只记 `FAILED` 继续下一条。**间隔按笔记算**：一条笔记内 N 张图一起下载没问题，笔记之间必须留间隔，不要并发拉多条。
+
+传输层失败（守护进程或扩展断连）会自动重启 `chrome-agent` 后重试一次；页面级失败（容器找不到、元素不可见）不重试。
+
+### 一条笔记目录里有什么
 
 ```text
-SEARCH → RESULT_READY → DETAIL_OPEN
-DETAIL_OPEN → IMAGE_NOTE / VIDEO_NOTE
-DETAIL_OPEN → BODY_READY → COMMENTS_READY
-任意状态 → APP_ONLY / LOGIN_HANDOFF / ACCESS_DENIED / REF_STALE
+<note-id>/
+  note.json       # 笔记本身：标题/作者/时间/互动数/标签/正文（给智能体直读）
+  comments.json   # 评论线程 + 完整性字段（补采只重写这个文件）
+  downloads.json  # 发现与下载的验证记录：URL、state、落盘文件名
+  images/  videos/
 ```
 
-## 语义识别规则
+三个文件的分工是硬规则：`note.json` 只放内容，不放"怎么采的"（tab、URL 清单、下载状态都在 `downloads.json`），也不放评论（在 `comments.json`，同目录固定文件名）。结构合同见 `schemas/*.schema.json`。
 
-| 目标 | 首选关系 | class 弱提示 |
+## 2. 关键踩坑与实践经验
+
+每条都是实测结论，括号里是证据来源；改代码前先看这一节。
+
+### 2.1 详情链接必须原样使用
+
+`xsec_token`/`xsec_source` 是访问上下文，禁止从笔记 ID 拼接、缩短或删除；优先点搜索结果里的实时 ref，必须导航时只原样用当前页面发现的完整 href。裸 `/explore/<id>` 不是可复用链接，落盘 URL 里的 token 也会过期（实测一条旧 URL 导航后落到 `/404`）。
+
+### 2.2 后台标签页会节流，读评论必须切前台
+
+Chrome 对后台标签页降频，小红书的下一批评论正由那个被降频的事件循环追加。实测一条声明 610 条的笔记：后台时滚到最底一分钟也不加载（容器行数停在 40、`maxScrollY` 停在 7092）；切前台后再滚，行数 40→60→80→100。所以"评论只读到 10 条、怎么滚都不动"几乎总是这个原因。代价是采集期间会抢占前台焦点，脚本会自己 `tabs activate`。
+
+### 2.3 快照是"按屏幕位置排序后取前 N 个"
+
+`page snapshot` 把所有可交互或有文本的元素按屏幕纵坐标排序（±50px 视为同一行，再按 x），取前 N 个，默认 N=500，并返回 `matched`/`truncated`。**被丢掉的是排序靠后的一端，不是"滚出视口的部分"**：实测一条长评论笔记滚到底后，`--limit 500` 返回的元素 y ∈ [-12073, -7956]——笔记正文（y=-12037，在视口上方）仍在快照里，而左栏轮播（y=32，在视口里）反而不在。调到 `--limit 3000` 后 `matched=3626, truncated=true`，两者都能通过 `page text --ref` / `page images --ref` 解析。
+
+实践规则：读长评论时把上限提到 `scroll.comments.snapshot_limit`（3000，`collect.py` 自动做）；`--load`（`page images` 的滚动加载）默认不开，因为它会滚动页面、改变排序位置。
+
+### 2.4 评论读取顺序与终止条件
+
+读取顺序固定：**先在笔记刚打开、还没滚动时读正文/图片/播放器，再滚动评论，最后才下载**。评论滚动以「容器文本连续 `max_idle_rounds` 轮没有新增行」为终止条件——滚动条报 `moved: false` **不代表**到底（实测 `moved` 已为 false 之后滚动上限仍从 3281 涨到 7938、行数 19→55）。判"够不够"用容器文本（`page text`，上限 20 万字符），不要用 snapshot 的元素个数。
+
+### 2.5 展开回复的轮次要覆盖整轮采集
+
+`scroll.comments.max_expand_rounds` 不小于 `max_steps`：每次只按一个「展开 N 条回复」，设小了会让尾部评论的折叠回复留在折叠态（实测 30 条预算下设 10，回复数 46→77 后就不再增长）并报 warning。
+
+### 2.6 评论滚动锚点必须在右半区
+
+左半区是图片轮播，在那里滚动是翻到下一张图，不会加载评论。`comments_scroll_anchors` 依次尝试评论容器 → 正文容器；正文是兜底，因为刚打开的笔记里 500 个名额可能被结果网格和每行的 `...` 菜单占满，评论容器进不了快照。
+
+### 2.7 找回复用 `comment-inner-container`，不是 `comment-item-sub`
+
+同一个父评论下，第 1 条回复的外层是 `comment-item comment-item-sub`，第 2 条及以后只是裸的 `comment-inner-container`。按 `comment-item-sub` 找会静默丢掉每个父评论第 2 条之后的全部回复。每行（顶层或回复）都恰好有一个 `comment-inner-container`，父评论自己那个由脚本按矩形排除。
+
+### 2.8 嵌套树分两段，来源不同
+
+- **顶层评论 ←→ 它的回复**：只认 DOM，`parent-comment` 容器包住房自己的行和整个 `reply-container`（作者回复时小红书会省掉 `回复 X ：` 前缀，文本里看不出来）。
+- **回复 ←→ 回复**：DOM 里是平铺的（实测三条回复是同一 `reply-container > list-container` 里的兄弟节点，x/宽度全相同），只能从文本的 `回复 X ：` 前缀重建。顶层评论作者不做特殊处理——特判会把实测的「提问→作者答→追问→作者再答」三级链压成平级。
+
+### 2.9 评论行的正文边界要"形态 + 下一行"两个条件
+
+每行 `text` 到「时间+地区」那一行为止：该行之上是正文（`作者`/`置顶评论` 徽标剔除），之下是 `赞`/点赞数/`回复`。判定该行既要求形态像日期或相对时间，**又要求紧邻下一行是那截 UI 尾巴**。只看前者会吃正文：实测 `70-200的头`（镜头焦距）被 `\d{2}-\d{2}` 当成日期 `70-20`、`0的头` 当地区，那条回复存成了空正文。
+
+### 2.10 掩码、关闭按钮与窄版布局
+
+详情遮罩开着时点背景卡片会打空（`page click` 仍返回 `clicked: true`）。`discover.py` 先试 `detail.close_control`（`button` + `close-icon`），不行再发 `dismiss_keys`（`Escape`）；窄版布局（实测 viewport 600×740）下关闭按钮是 `display:none`，实际生效的是 Escape。两条都不通就报错中止。
+
+### 2.11 图片作用域与下载白名单
+
+先 `page images --ref <轮播 ref>` 发现并核验，再把 URL 白名单交给 `download-images`；不要对 `note-container`、评论容器或整页直接 `download-images --limit`，否则表情、头像、推荐卡片的小图会一起进来。判断"是不是笔记原图"以**作用域**为准，不以 URL 或尺寸为准（头像是 360px、评论配图 640px，都过不了尺寸阈值）。轮播容器（`detail.image_media`）里的每一张都是本笔记的图；只有退到 `detail.container` 时才按 CDN 主机名和路径过滤。
+
+### 2.12 视频：`blob:` 不是文件地址
+
+播放器容器里的 `<video>` 可能只暴露 `blob:`，direct MP4 在页面级 JSON-LD（`VideoObject`）里。先 scoped media 确认播放器，再做一次不带 ref 的 page-level media discovery。blob/HLS/DASH/unsupported 只报告，不下载。
+
+### 2.13 笔记元数据哪些拿得到
+
+| 字段 | 来源 | 备注 |
 |---|---|---|
-| 搜索框 | input + 搜索语义 | `search-input` |
-| 结果卡片 | 带访问上下文的 `/search_result/<id>` 可见 cover anchor | `note-item`, `cover mask` |
-| 详情 | 覆盖背景且包含正文/媒体/评论 | `note-detail-mask`, `note-container` |
-| 正文 | 详情内最窄长文本容器 | `note-text` |
-| 图片 | 详情内带页码的媒体容器 | `xhs-slider-container` |
-| 视频 | 内含 video 和播放器控制 | `video-player-media`, `player-container` |
-| 评论 | 详情交互区评论总容器 | `comments-container`（外层 `comments-el`） |
+| 标题 | `h1.title` | 用 h1 限定，推荐卡片也有 `.title` |
+| 作者 / 作者 ID | `author-container > a.name` 的文本与 `/user/profile/<id>` | 评论作者也用 `a.name`，必须先用 `author-container` 框定 |
+| 标签 | `hash-tag` | 页面文本是 `#户外[话题]#`，落盘只留 `户外` |
+| IP 属地 | 页脚 `.date` 的 `日期 [属地]` | **并非每条都有**：实测四种形态 `08-01`、`09-29 河南`、`2025-11-03`、`4天前 西藏`；没有属地时存 null |
+| 互动数 | `engage-bar interactions` 里的 `like-wrapper`/`collect-wrapper`/`chat-wrapper` | 实测 2341/3159/610；**页面没有分享数元素**，`shares` 恒为 null |
+| 发布时间 | 笔记 ID 前 8 位十六进制解码（+08:00） | 页面只印部分日期（`08-01`、`4天前`），无法定位到具体时刻。两次验证：`6a6df219`→2026-08-01（与页脚 `08-01` 一致）、`6a1cf8f9`→2026-06-01（与另一份抓取的发布日期一致） |
 
-这些 class 是 `locators.yaml` 中的弱提示，不是脚本内联 selector；运行时仍须结合可见区域、容器关系、文字和元素类型重新判断。
+互动区的 class 与评论行自己的计数同名，所以计数一律以 `engage-bar` 的矩形为界在内部找。
 
-## 小红书链接访问上下文
+## 3. 目录与文件职责
 
-小红书详情链接可能携带 `xsec_token`、`xsec_source` 等访问上下文。智能体不得从笔记 ID 自行拼接、缩短或清除这些参数；优先点击搜索结果中的实时 ref。若必须导航，只能原样使用当前页面发现的完整 href。没有 `xsec_token` 的裸 `/explore/<id>` 链接不应被视为可长期复用的详情 URL。
-
-## 标准工作流
-
-1. 在搜索结果页执行 `scripts/discover.py`，得到候选结果的实时 `ref`、`noteId`、标题和完整 `href`。
-2. 智能体用 `--open-rank` 打开候选；若已有详情遮罩，脚本先关掉它（见下）。`--open-rank` 会**核验落点**：点完轮询 URL 与详情标记（`detail.open_markers`），只有确认落在目标 `noteId` 上才返回成功；点不中时自动退回 `--open-mode navigate`，两条路都不中则报错退出，不会把上一条笔记当成本次结果。当前页不是搜索结果页时同样报错并给出实际 URL，而不是返回空候选。
-3. 详情打开后重新 snapshot，智能体识别正文、媒体、评论的最窄实时 ref。
-4. 智能体把这些 ref 传给 `scripts/collect.py`，由脚本做固定的提取、下载、去重和 JSON 输出。
-5. 返回结果页后重新 snapshot，再处理下一条；所有旧 ref 作废。
-
-### 关闭详情遮罩
-
-详情遮罩覆盖在结果页之上，遮罩开着时点击背景卡片会打空（`page click` 仍返回 `clicked: true`）。`discover.py` 按两条路依序尝试：
-
-1. `locators.yaml` 的 `detail.close_control`（`button` + `close-icon`）；
-2. `detail.dismiss_keys`（默认 `Escape`），发在 `detail.mask` / `detail.container` 上。
-
-窄版布局（实测 viewport 600×740）下小红书把关闭按钮设为 `display:none`，所以第 1 条路不通、实际生效的是 Escape。两条都不通时脚本报错中止，而不是继续点遮罩。
-
-## 脚本入口：何时使用、如何使用
-
-脚本由智能体调用，用户通常只需提出任务，不需要手动填写 ref。它们不替代智能体的页面理解：`ref` 会在页面刷新、打开详情或切换轮播后失效，必须由智能体从**当次** snapshot 重新解析。
-
-| 脚本 | 使用时机 | 输入 | 输出 | 不负责的事 |
-|---|---|---|---|---|
-| `scripts/discover.py` | 已完成搜索、当前处于结果页时 | `tab-id`、候选数量；`--open-rank` 可顺带打开 | `/search_result/` 候选的 rank、ref、title、noteId、href；打开时返回核验过的 `noteId` 与所用 `mode` | 默认不打开详情；不保证裸 href 可访问 |
-| `scripts/collect.py` | 已打开一条详情时 | `tab-id`、选择是否下载图片/视频；ref 可作为回退参数 | 单条笔记 JSON、下载状态、文件名 | 不搜索、不绕过 App-only/验证码/登录 |
-
-### 1. 结果页：发现候选笔记
-
-智能体先在当前搜索结果 tab 运行：
-
-```bash
-python playbooks/xiaohongshu/scripts/discover.py --tab-id <search-tab-id> --limit 10
+```text
+playbooks/xiaohongshu/
+  PLAYBOOK.md          # 本文件：流程、踩坑、证据
+  locators.yaml        # 页面语义规则：选择器、作用域、滚动与阈值
+  scripts/
+    runtime.py         # 通用层：CLI 调用、快照、ref 匹配、文本读取（无站点流程）
+    discover.py        # 搜索结果页：发现候选、打开并核验落点
+    note.py            # 详情页：元数据与正文 → note.json
+    media.py           # 详情页：图片/视频发现与下载 → downloads.json
+    comments.py        # 详情页：评论滚动、展开、解析、嵌套 → comments.json
+    collect.py         # 编排 + CLI：串起上面四块，写三个产出文件
+    batch.py           # 无人值守：按清单串起 discover/collect，含 --comments-only
+    migrate.py         # 离线把旧目录改写成当前结构（补采碰到旧目录时也会走它）
+  schemas/
+    note-output.schema.json      # 三个产出文件各自的结构合同
+    comments-output.schema.json
+    downloads-output.schema.json
 ```
 
-候选由 `locators.yaml` 的 `search.result_link` 规则筛选：必须是可见、有尺寸、带 `xsec_token` 的 `/search_result/` 卡片链接。标题优先由同 href 的 title anchor 关联，缺失时才取包含卡片文本。打开第一条的推荐方式：
-
-```bash
-python playbooks/xiaohongshu/scripts/discover.py \
-  --tab-id <search-tab-id> --limit 10 --open-rank 1
-```
-
-若点击被页面改版阻断，才显式改用 `--open-mode navigate`；该模式仍只使用这次 discovery 输出的完整 href。
-
-### 2. 详情页：收集一条笔记
-
-智能体打开详情后，`collect.py` 会从**当次** snapshot 按 `locators.yaml` 解析正文、图片/视频和评论容器。评论未挂载时，它按 `scroll.comments` 的步长滚动 `note-scroller`，直到 `stop_when` 里的规则命中（默认 `moved_false` 或 `no_progress`），再解析已挂载的评论。命令行 ref 仅用于规则暂时失配时的回退。随后运行：
-
-```bash
-python playbooks/xiaohongshu/scripts/collect.py \
-  --tab-id <detail-tab-id> \
-  --images-ref <slider-ref> \
-  --download-images \
-  --prefix <note-id> \
-  --output-dir outputs/xiaohongshu/<note-id>
-```
-
-`--comment-scrolls N` 是**最多滚动步数的上限**，不是「滚 N 次」：不传时用 `locators.yaml` 的 `scroll.comments.max_steps`。它应该只在需要主动收紧上限时使用；正常情况下不要传，交给配置决定。
-
-视频笔记将 `--images-ref ... --download-images` 换成 `--media-ref <player-ref> --download-media`。图文和视频都可以保留评论参数。`--output-dir` 会生成统一的笔记目录：`note.json` 放正文、评论和下载记录，图片放 `images/`，视频放 `videos/`。脚本会只下载已发现且符合笔记原图特征的 URL；`downloads` 中必须逐项为 `state=complete` 才算下载成功。
-
-兼容旧用法的 `--output <json-path>` 仍可使用，但媒体会放在该 JSON 同级的 `images/`、`videos/` 目录；新任务应优先使用 `--output-dir`，避免不同笔记的媒体混放。
-
-如页面发生重渲染、脚本提示 ref 不存在、内容为 App-only 或下载候选为空，停止复用旧 ref，回到 snapshot 与页面状态判断步骤；不要让脚本猜测选择器。
-
-## 正文与评论
-
-正文使用 `page text --ref <body-ref>`；评论的定位与滚动由 `collect.py` 读取 `locators.yaml` 后完成，智能体不应再写死评论容器 ref 或滚动距离。
-
-评论仅代表 Web 页面当前滚动/展开后已加载的内容。`note.json` 的 `comments.items` 是 `{author, text}` 记录；时间/地区、点赞、回复按钮、回复展开提示和作者徽标等 UI 元数据不会写入每条评论，完整页面原始文本保留在 `comments.rawText`。需要更多折叠回复时，智能体先点击“展开 N 条回复”，再重新执行采集。
-
-`scroll.comments.stop_when` 支持 `moved_false`（CLI 报告无法继续移动）、`no_progress`（位置与最大滚动量较上一步没变）、`at_max`（已到 `maxScrollY`），按顺序取第一个命中的规则结束循环。达到 `max_steps` 仍未终止时，`note.json` 会带一条「滚动达到上限」的 warning。
-
-## `locators.yaml`：页面规则与脚本边界
-
-`locators.yaml` 是本站 Playbook 的页面语义配置：结果链接路径与访问上下文、卡片标题关联、详情关闭控件与 `dismiss_keys`、正文/媒体/评论容器，以及评论滚动步长/上限/`stop_when` 均在此维护。`discover.py` 和 `collect.py` 只读取配置、在**当次** snapshot 中解析 ref、调用通用 CLI；不得把站点路径、class 关键词或滚动终止规则重新写回脚本。
-
-## 图片与视频
-
-```bash
-chrome-agent page images --tab-id <id> --ref <slider-ref> --json
-chrome-agent page download-images --tab-id <id> --ref <slider-ref> --url '<已核验图片 URL>' --prefix <note-id> --json
-chrome-agent page media --tab-id <id> --ref <player-ref> --json
-chrome-agent page download-media --tab-id <id> --ref <player-ref> --prefix <note-id> --json
-```
-
-虚拟轮播按 Skill 流程逐页点击并去重。本次视频探索样例同时暴露 `<video>` 和 JSON-LD `VideoObject.contentUrl`，direct MP4 可下载；blob/HLS/DASH 只报告。
-
-图片必须先通过 `page images --ref <slider-ref> --load` 发现并核验，再传 URL 白名单下载；不得对 `note-container`、评论容器或整页直接 `download-images --limit`，否则会下载表情、头像或推荐卡片的小图。
-
-播放器容器内的 `<video>` 可能只暴露 `blob:`，而 direct MP4 位于页面级 JSON-LD。因此先用 scoped media 确认目标播放器，再执行一次不带 ref 的 page-level media discovery；按当前笔记、类型、时长和结构化数据关联 direct URL。不得把 blob URL 当作文件下载地址。
-
-## 完成条件
-
-- 来源 URL 保留访问参数；正文未静默截断；
-- 评论说明是否可能不完整；
-- 下载逐项返回 `state=complete` 和 filename；
-- 输出符合 Schema；背景结果、头像、图标未混入媒体。
-
-## 失败恢复和限制
-
-- ref 失效：重新 full snapshot；URL 过期：重新发现媒体；
-- App-only/风控：记录并跳过，不绕过；
-- 遮罩关不掉（`close_control` 不可见且 `dismiss_keys` 无效）：`discover.py` 报错中止，此时应原样重新导航到搜索页 URL，不要带着遮罩继续点卡片；
-- `--open-rank` 报「没有落在目标笔记」：说明 click 和 navigate 都没能把页面带到目标，不要沿用当前页面继续采集；
-- 评论回复展开和虚拟轮播仍由智能体根据实时 DOM 编排；
-- 首页 Top 由网站当次排序决定，不假设固定结果。
-
-## 验证用例
-
-- 关键词：`稻城亚丁攻略`；
-- 图文：正文、轮播、评论；视频：direct MP4、正文、评论；
-- 失败：App-only、缺失或过期 `xsec_token`。
-
-本次真实探索证据见 `fixtures/exploration-2026-08-20.md`。
+- **改选择器/阈值** → 只改 `locators.yaml`；脚本里不得内联站点 selector，也不得重启新的滚动终止规则。
+- **改产出结构** → 同时改脚本和对应的 `schemas/*.schema.json`；`tests/test_output_schemas.py` 会用一次真实采集校验两者一致。
+- **`ref` 的生命周期**：同一元素的 ref 在多次快照间保持不变，元素被移除/重渲染后失效，导航或刷新会替换整份注册表。Playbook 提供的是流程，不是可复用的 ref——每次都要从当次快照重新解析。

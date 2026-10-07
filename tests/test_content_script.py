@@ -140,3 +140,27 @@ class TestExtensionManifest:
         optional_permissions = data["optional_host_permissions"]
         assert "http://*/*" in optional_permissions
         assert "https://*/*" in optional_permissions
+
+    def test_snapshot_element_limit_is_per_call_and_defaults_to_500(self):
+        """The 500 ceiling is a real one: one dense list row is ~20 elements."""
+        content = (Path(__file__).parent.parent / "extension" / "content.js").read_text()
+
+        assert "const SNAPSHOT_DEFAULT_LIMIT = 500;" in content
+        assert (
+            "function buildSnapshot(scope = 'viewport', element = null, "
+            "limit = SNAPSHOT_DEFAULT_LIMIT)" in content
+        )
+        # 0 means "no cap", so the caller can ask for the whole page.
+        assert "const capped = limit > 0 ? elements.slice(0, limit) : elements;" in content
+        assert "truncated: capped.length < elements.length," in content
+        assert "params?.limit ?? SNAPSHOT_DEFAULT_LIMIT" in content
+
+    def test_background_passes_the_snapshot_limit_through(self):
+        background = (
+            Path(__file__).parent.parent / "extension" / "background.js"
+        ).read_text()
+
+        assert "const { tabId, scope, limit } = params;" in background
+        # Omitted means the content script's own default decides, so the number
+        # lives in exactly one place.
+        assert "limit === undefined ? { scope: scope || \"viewport\" }" in background
