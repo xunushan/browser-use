@@ -15,7 +15,6 @@ Chrome Agent 是一个本地浏览器自动化系统，让 AI 智能体**接管�
     - [特性](#特性)
     - [规划](#规划)
   - [安装说明](#安装说明)
-    - [装完必须做的事：读懂 `setup.sh` 的结尾](#装完必须做的事读懂-setupsh-的结尾)
     - [验证流程](#验证流程)
     - [站点授权](#站点授权)
     - [故障定位](#故障定位)
@@ -54,13 +53,15 @@ V1 采用 **DOM 优先** 策略：智能体通过稳定的元素引用（ref）�
 
 ## 安装说明
 
-本节的读者是**智能体**：照下面执行即可完成安装。人类用户也可以直接照做，或把本节交给智能体。
+本节的读者是**智能体**：照下面执行即可完成安装。
 
-前置：macOS 或 Linux（Windows 未验证）、已安装 Google Chrome、以及
-[`uv`](https://docs.astral.sh/uv/)（没有就 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。
+前置：macOS 或 Linux（Windows 未验证）、已安装 Google Chrome、[`uv`](https://docs.astral.sh/uv/)
+（没有就 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。
 
-**仓库就是 skill**，装它 = 把仓库解到智能体读技能的地方。仓库归档里已经剔除了开发用的
-`tests/` 与 `docs/`（`.gitattributes` 的 `export-ignore`），所以装进去的只有最小可运行集：
+### 步骤 1：把 skill 解到技能目录
+
+**仓库就是 skill**。归档里已经剔除了开发用的 `tests/` 与 `docs/`（`.gitattributes` 的
+`export-ignore`）：
 
 ```bash
 rm -rf ~/.claude/skills/chrome-agent
@@ -69,44 +70,41 @@ curl -fsSL https://github.com/xunushan/chrome-agent/archive/refs/heads/main.tar.
   | tar -xz --strip-components=1 -C ~/.claude/skills/chrome-agent
 ```
 
-然后配置一次——运行环境、Native Messaging Host、扩展 ID、扩展副本都在这一步备好，之后
-直接用 `chrome-agent` 命令就行：
+### 步骤 2：运行 setup.sh
 
 ```bash
 ~/.claude/skills/chrome-agent/setup.sh
 ```
 
-### 装完必须做的事：读懂 `setup.sh` 的结尾
+它一次备好运行环境（`~/chrome-agent/venv`）、Native Messaging Host、扩展 ID、扩展副本
+（`~/chrome-agent/extension`）和 `chrome-agent` 命令。这一步不需要人工。
 
-`setup.sh` 结尾会自己判断扩展那一摊该不该动**再**说话，所以它打印的就是当前该做的事。
-**不要无脑让用户去重新加载扩展**——那是一年一次的操作，不是每次更新的一部分：
+### 步骤 3：按 setup.sh 的结尾输出决定下一步
 
-| `setup.sh` 结尾说 | 该做什么 |
+它打印什么就做什么，不要自行加戏：
+
+| 结尾输出 | 你要做的 |
 |---|---|
-| "已就绪" / "已经在这份拷贝上" | 什么都不用做 |
-| "已重载" | 更新后的文件已被扩展自己读进去，什么都不用做 |
-| "Chrome 没在运行" | 无法确认；扩展加载过就一直有效，同样不用做 |
-| **"One step is left"** | **只有这一种情况**，才提示用户完成下面这唯一的人工步骤 |
+| `One step is left` | 请用户完成步骤 4。这是唯一需要人工的情况 |
+| 已就绪 / 已经在这份拷贝上 / 已重载 | 到此为止，不要再让用户动扩展 |
+| Chrome 没在运行 | 无法确认；扩展加载过就一直有效，不要打扰用户 |
 
-需要人工时，逐字告诉用户（这几步少一步就会失败）：
+### 步骤 4：请用户加载扩展
+
+仅当步骤 3 打印 `One step is left` 时。逐字说清这四步，少一步就会失败：
 
 1. 打开 `chrome://extensions`；
 2. 打开右上角的**开发者模式**；
 3. 点**加载已解压的扩展程序**；
 4. 在文件选择框里进到 `~/chrome-agent`，**单击选中 `extension` 文件夹让它变蓝**，再点"打开"。
 
-**Chrome 没有静默安装路径**，这一步只能由用户点，每个浏览器 profile 一次。清单里的 `key`
-已经把扩展 ID 固定下来，**不需要再抄 ID**。开发者模式要一直开着（Chrome 133 起，关掉即
-禁用未打包扩展）。
+### 踩坑
 
-**重装或更新 skill 永远不需要重新加载扩展**：Chrome 记住的是加载时那个目录路径，而扩展放
-在 `~/chrome-agent/extension`，不在 skill 目录里；`setup.sh` 会把新文件同步过去，并让扩展
-自己重载。
-
-安装目录叫 `~/chrome-agent` 而不是 `~/.chrome-agent`，也是为这一步：macOS 的文件选择框
-根本不列出点开头的目录，隐藏路径在那里选不中。早于这次改动的安装不会被自动搬走，
-`setup.sh` 只会在结尾提示它还在；怎么收尾见
-[`references/install-and-setup.md`](references/install-and-setup.md)。
+- 开发者模式必须一直开着：Chrome 133 起，关掉即禁用未打包扩展。
+- 步骤 4 选的是 `~/chrome-agent/extension` 这个文件夹本身；选成它的父目录会报"清单文件缺失或不可读取"。
+- 扩展 ID 由清单里的 `key` 固定，不需要手动抄写或核对。
+- **更新 skill 时不要重做步骤 4**：扩展加载自 `~/chrome-agent/extension`，不在 skill 目录里，
+  `setup.sh` 会把新文件同步过去，并让扩展自己重载。
 
 ### 验证流程
 
