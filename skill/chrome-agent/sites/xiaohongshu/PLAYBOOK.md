@@ -8,6 +8,12 @@
 
 ### 0. 前置
 
+先把本 Playbook 的目录取出来——脚本在它旁边，用绝对路径运行才不会依赖当前工作目录：
+
+```bash
+SITE="$(chrome-agent playbook --domain xiaohongshu.com --dir)"
+```
+
 ```bash
 chrome-agent ensure --launch-if-missing --wait-for-extension --timeout 30 --json
 chrome-agent tabs list --json           # 挑一个已登录小红书的标签页
@@ -20,7 +26,7 @@ chrome-agent tabs activate <tab-id> --json   # 采评论必须在前台，见 2.
 先把目标 tab 导航到 `https://www.xiaohongshu.com/search_result?keyword=<关键词>&source=web_search_result_notes&type=51`，然后：
 
 ```bash
-python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10
+python "$SITE/scripts/discover.py --tab-id <tab-id> --limit 10
 ```
 
 判据：输出里有 rank/ref/title/noteId/href，且 href 带 `xsec_token`。当前页不是搜索结果页时脚本报错并打印实际 URL，而不是返回空列表。
@@ -28,8 +34,8 @@ python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10
 ### 2. 打开一条并核验落点
 
 ```bash
-python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10 --open-rank 1
-python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10 --open-rank 1 --open-mode navigate
+python "$SITE/scripts/discover.py --tab-id <tab-id> --limit 10 --open-rank 1
+python "$SITE/scripts/discover.py --tab-id <tab-id> --limit 10 --open-rank 1 --open-mode navigate
 ```
 
 判据：返回被核验过的 `noteId`（等于目标）与所用 `mode`。脚本会先关掉上一条留下的详情遮罩，点完轮询 URL 与详情标记（`detail.open_markers`），只有确认落在目标笔记上才算成功；点不中自动退回 `navigate`，两条路都不中则报错退出——**不要**在报错后沿用当前页面继续采集。
@@ -38,11 +44,11 @@ python playbooks/xiaohongshu/scripts/discover.py --tab-id <tab-id> --limit 10 --
 
 ```bash
 # 图文
-python playbooks/xiaohongshu/scripts/collect.py --tab-id <tab-id> \
+python "$SITE/scripts/collect.py --tab-id <tab-id> \
   --download-images --prefix <note-id> --output-dir outputs/xiaohongshu/<note-id>
 
 # 视频
-python playbooks/xiaohongshu/scripts/collect.py --tab-id <tab-id> \
+python "$SITE/scripts/collect.py --tab-id <tab-id> \
   --download-media --prefix <note-id> --output-dir outputs/xiaohongshu/<note-id>
 ```
 
@@ -53,12 +59,12 @@ python playbooks/xiaohongshu/scripts/collect.py --tab-id <tab-id> \
 ### 4. 批量与补采
 
 ```bash
-python playbooks/xiaohongshu/scripts/batch.py \
+python "$SITE/scripts/batch.py \
   --tab-id <tab-id> --plan <笔记清单.json> --output-root <输出根目录> \
   --interval 15
 
 # 已有 note.json 的笔记，只补评论
-python playbooks/xiaohongshu/scripts/batch.py \
+python "$SITE/scripts/batch.py \
   --tab-id <tab-id> --plan <笔记清单.json> --output-root <输出根目录> --comments-only
 ```
 
@@ -149,7 +155,7 @@ Chrome 对后台标签页降频，小红书的下一批评论正由那个被降�
 ## 3. 目录与文件职责
 
 ```text
-playbooks/xiaohongshu/
+<skill 目录>/sites/xiaohongshu/     # chrome-agent playbook --domain xiaohongshu.com --dir
   PLAYBOOK.md          # 本文件：流程、踩坑、证据
   locators.yaml        # 页面语义规则：选择器、作用域、滚动与阈值
   scripts/

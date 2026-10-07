@@ -15,7 +15,7 @@ These are the only files in this skill; nothing else needs reading up front.
 | What you are about to do | Read this |
 |---|---|
 | Any task | this file — the five sections below are enough to start |
-| The target site already has a Playbook | `playbooks/<site>/PLAYBOOK.md` (route there in section 4) |
+| The target site already has a Playbook | its `PLAYBOOK.md` (section 4 routes there) |
 | Exploring an unfamiliar site, or creating/updating a Playbook | [references/site-exploration-and-playbook-spec.md](references/site-exploration-and-playbook-spec.md) |
 | Fetching images, video or audio from a page | [references/media-and-downloads.md](references/media-and-downloads.md) |
 | A ref stopped working, the snapshot is missing the target, scrolling does nothing, access was refused, a download failed | [references/troubleshooting.md](references/troubleshooting.md) |
@@ -28,18 +28,10 @@ chrome-agent tabs list --json
 ```
 
 Reuse a suitable signed-in tab rather than opening a new one, and claim it before
-operating on it:
-
-```bash
-chrome-agent tabs claim <tab-id> --json
-```
+operating on it: `chrome-agent tabs claim <tab-id> --json`.
 
 Bring a background tab forward before anything that depends on visible layout or
-the current viewport:
-
-```bash
-chrome-agent tabs activate <tab-id> --json
-```
+the current viewport: `chrome-agent tabs activate <tab-id> --json`.
 
 If the tab has not been authorized, ask the user to click the Chrome Agent
 extension on that tab and grant access. Never try to get around login, CAPTCHA,
@@ -87,12 +79,12 @@ Four things about refs and snapshots are worth getting right the first time:
 
 ## 3. Command surface
 
-Every command is `chrome-agent <group> <command>`; parameter details are in
-`chrome-agent <group> <command> --help`, and `chrome-agent --help` lists the
-groups.
+Every command is `chrome-agent <group> <command>`, and `chrome-agent --help`
+lists the groups; parameter details are in `<group> <command> --help`.
 
 ```text
 service:  ensure | status | start | stop | version
+routing:  playbook --domain <host> | --list
 tabs:     tabs list | open | claim | activate | navigate
 observe:  page snapshot | extract | text --ref | validate | wait
 act:      page click | fill | keypress | scroll
@@ -106,18 +98,24 @@ filename and every failed or interrupted item.
 
 ## 4. Route to a site Playbook
 
-Derive the registrable domain from the user's URL or from `tabs list`
-(`www.example.com` → `example.com`) and look for a Playbook:
+This skill is the tool manual; a site's own workflow lives in its Playbook.
+Derive the registrable domain from the user's URL or from `tabs list`, then ask
+which Playbook covers it before touching the page:
 
 ```bash
-rg -l --glob 'PLAYBOOK.md' '<registrable-domain>' playbooks
+chrome-agent playbook --domain <registrable-domain-or-url> [--dir] [--json]
+chrome-agent playbook --list                       # every installed Playbook
 ```
+
+`--dir` prints the site's directory instead of its `PLAYBOOK.md`, and the site's
+scripts sit in it, so run them from there. The lookup resolves against wherever
+this skill is installed, so a checkout and an installed skill answer alike, and
+nothing covering the domain exits non-zero.
 
 If one matches, read it completely and follow it before touching the site. A
 Playbook carries reusable workflow and rules, not stale locators: resolve every
-ref again from the current snapshot. Only when nothing matches do you read
-[references/site-exploration-and-playbook-spec.md](references/site-exploration-and-playbook-spec.md)
-and start a new exploration.
+ref again from the current snapshot. Nothing matching means you explore the site
+and write one, per the spec in the table above.
 
 ## 5. Safety and handoff
 

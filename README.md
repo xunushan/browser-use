@@ -89,7 +89,7 @@ Content Script
 
 ### 站点沉淀：Playbook
 
-Chrome Agent 的通用接口只解决跨站能力，**特定网站的具体流程沉淀在 [`playbooks/<site>/`](playbooks/)**（参考现有 [`playbooks/xiaohongshu/`](playbooks/xiaohongshu/)），由智能体在跑该网站时读取执行。
+Chrome Agent 的通用接口只解决跨站能力，**特定网站的具体流程沉淀在 [`skill/chrome-agent/sites/<site>/`](skill/chrome-agent/sites/)**（参考现有 [`sites/xiaohongshu/`](skill/chrome-agent/sites/xiaohongshu/)），由智能体在跑该网站时读取执行。智能体不用拼路径去找它：`chrome-agent playbook --domain <域名>` 按 skill 的实际安装位置解析出该读哪个 `PLAYBOOK.md`，`--dir` 给出站点目录（脚本就在旁边）。
 
 ---
 
@@ -98,16 +98,18 @@ Chrome Agent 的通用接口只解决跨站能力，**特定网站的具体流�
 ### 安装步骤
 
 1. 打开 `chrome://extensions`，启用开发者模式。
-2. 选择"加载已解压的扩展程序"，加载项目中的 `extension/` 目录。
-3. 复制 Chrome 显示的 32 位扩展 ID，运行：
+2. 选择"加载已解压的扩展程序"，加载项目中的 `extension/` 目录。清单里的 `key` 把扩展 ID 固定下来，**不需要再抄 ID**。
+3. 运行安装脚本：
 
    ```bash
-   ./install.sh <扩展ID>
+   ./install.sh
    ```
 
-   该脚本一次性安装 CLI / daemon / Native Messaging Host，并把 `.claude/skills/chrome-agent` 链接到 `~/.claude/skills/` 与 `~/.codex/skills/`。
+   该脚本构建并安装 CLI / daemon / Native Messaging Host，按清单里的 `key` 算出扩展 ID 写进 host 清单，并把 `skill/chrome-agent` 安装（开发模式软链、发布包复制）到 `~/.claude/skills/` 与 `~/.codex/skills/`。
 
-4. 在 `chrome://extensions` 重新加载扩展。
+4. 回到 `chrome://extensions` 重新加载扩展；脚本会打印应有的扩展 ID，核对一致即可。
+
+不想留下仓库时用发布包：`./release.sh` 产出 `chrome-agent-<版本>-bundle.tar.gz`，解压后 `./install.sh`，装完可删掉解压目录。卸载用 `./install.sh --uninstall`。细节见 [docs/release.md](docs/release.md)。
 
 小红书已预授权；操作其他网站前，用户需在目标标签页点击 Chrome Agent 图标并授权当前网站。
 
@@ -226,11 +228,15 @@ chrome-agent page download-media --tab-id <tab-id> --ref <media-ref> --prefix no
 
 ## chrome-agent Skill
 
-`.claude/skills/chrome-agent/` 是智能体侧的入口文件，告诉智能体如何组合 CLI 完成常见任务（浏览、搜索、点击、填写、滚动、提取、下载）。
+[`skill/chrome-agent/`](skill/chrome-agent/) 是智能体侧的全部内容：
 
-智能体在接手浏览器自动化任务时应自动加载该 Skill；处理特定网站时再加载对应的 [`playbooks/<site>/`](playbooks/)。
+- [`SKILL.md`](skill/chrome-agent/SKILL.md)：工具说明书。只讲通用启动、操作循环、命令能力、路由与安全，不含任何站点内容。
+- [`references/`](skill/chrome-agent/references/)：通用细则（新站点探索规范、媒体与下载、排错），按需加载。
+- [`sites/<site>/`](skill/chrome-agent/sites/)：各站点自己的流程（`PLAYBOOK.md`）、页面语义（`locators.yaml`）、脚本与产出合同。
 
-完整内容见 [`.claude/skills/chrome-agent/SKILL.md`](.claude/skills/chrome-agent/SKILL.md)；新建或更新 Playbook 前请阅读 [`.claude/skills/chrome-agent/references/site-exploration-and-playbook-spec.md`](.claude/skills/chrome-agent/references/site-exploration-and-playbook-spec.md)。
+skill 在仓库里开发，`.claude/skills/chrome-agent` 只是指向它的一份本地软链接（`.claude/` 不入库）；安装脚本会把 `skill/chrome-agent` 链接或复制到 `~/.claude/skills/` 与 `~/.codex/skills/`。
+
+新建或更新 Playbook 前请阅读 [`references/site-exploration-and-playbook-spec.md`](skill/chrome-agent/references/site-exploration-and-playbook-spec.md)。
 
 ---
 

@@ -11,7 +11,7 @@
 - 下载任务持久化、取消、进度查询和断点恢复；
 - 增加文件 MIME、大小、hash 和扩展名校验；
 - 修复 screenshot：校验活动 tab，避免截错后台标签页；
-- 建立小红书 Playbook 与脱敏回归 fixture；
+- 建立小红书 Playbook 与产出 schema 校验（不再要求脱敏回归 fixture）；
 - 增加 modal、虚拟轮播、懒加载和短期签名 URL 的端到端测试。
 
 ## 3. P1：CDP/Puppeteer 高级浏览器能力

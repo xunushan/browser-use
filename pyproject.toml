@@ -38,6 +38,12 @@ dev = [
 [project.scripts]
 chrome-agent = "chrome_agent.cli:main"
 
+# The wheel is the runtime and nothing else. The extension and the skill are
+# shipped as their own artifacts, because they are installed by hand and read by
+# an agent rather than imported.
+[tool.hatch.build.targets.wheel]
+packages = ["chrome_agent"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

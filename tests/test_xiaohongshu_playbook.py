@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS = Path(__file__).parent.parent / "playbooks" / "xiaohongshu" / "scripts"
+SCRIPTS = (
+    Path(__file__).parent.parent / "skill" / "chrome-agent" / "sites" / "xiaohongshu" / "scripts"
+)
 sys.path.insert(0, str(SCRIPTS))
 
 import batch  # noqa: E402

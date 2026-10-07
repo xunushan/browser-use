@@ -24,6 +24,8 @@ htmlcov/
 # 采集产物：本地产出的数据，不入库
 outputs/
 
-# Claude Code：本地配置不入库，但项目自己的 skill 必须入库（要同步到远程）
-.claude/*
-!.claude/skills/
+# Claude Code 本地配置。skill 本体开发在 skill/ 下，这里只放一个指向它的软链接
+.claude/
+
+# 扩展私钥：只在本机 ~/.chrome-agent/extension-key.pem 与备份里存在
+*.pem

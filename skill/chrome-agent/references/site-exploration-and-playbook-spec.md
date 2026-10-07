@@ -2,7 +2,7 @@
 
 ## 目标
 
-把跨网站能力保留在 Chrome Agent CLI，把网站结构、状态、恢复规则和确定性解析代码沉淀在项目级 `playbooks/<site>/`。探索时只使用用户授权的当前 Chrome，不绕过登录、验证码、扫码、风控或内容保护。
+把跨网站能力保留在 Chrome Agent CLI，把网站结构、状态、恢复规则和确定性解析代码沉淀在本 skill 的 `sites/<site>/`（与 `SKILL.md` 同级）。探索时只使用用户授权的当前 Chrome，不绕过登录、验证码、扫码、风控或内容保护。
 
 ## 新网站探索流程
 
@@ -28,7 +28,7 @@
 ## Playbook 包结构
 
 ```text
-playbooks/<site>/
+<skill 目录>/sites/<site>/
   PLAYBOOK.md
   locators.yaml
   scripts/
@@ -36,6 +36,8 @@ playbooks/<site>/
   schemas/
     output.schema.json
 ```
+
+站点目录不要靠拼路径找：`chrome-agent playbook --domain <host> --dir` 会打印它，`--domain <host>` 打印要读的 `PLAYBOOK.md`；两者都按 skill 的实际安装位置解析。站点脚本在自己的目录里互相引用，因此用打印出来的绝对路径运行它们。
 
 - `PLAYBOOK.md`：页面状态机、语义识别、标准工作流、完成条件、失败恢复与已知限制，附关键观测的证据。
 - `locators.yaml`：页面语义规则（选择器、作用域、阈值）。脚本读它，不内联站点选择器。

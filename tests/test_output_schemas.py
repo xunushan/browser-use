@@ -17,7 +17,9 @@ import pytest
 import test_xiaohongshu_playbook as playbook
 from test_xiaohongshu_playbook import NOTE, FakeNoteBrowser, patch_browser
 
-SCHEMAS = Path(__file__).parent.parent / "playbooks" / "xiaohongshu" / "schemas"
+SCHEMAS = (
+    Path(__file__).parent.parent / "skill" / "chrome-agent" / "sites" / "xiaohongshu" / "schemas"
+)
 
 SCHEMA_FILES = [
     "note-output.schema.json",
