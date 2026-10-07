@@ -285,7 +285,7 @@ chrome-agent page download-media --tab-id <tab-id> --ref <media-ref> --prefix no
 - [`chrome_agent/`](chrome_agent/)：运行时；[`extension/`](extension/)：Chrome 扩展的源码，
   实际被 Chrome 加载的是 `~/chrome-agent/extension` 那份副本。
 
-开发时 `.claude/skills/chrome-agent` 是指向本仓库的软链（`.claude/` 不入库），
+开发时 `~/.claude/skills/chrome-agent` 是指向本仓库的软链（仓库内的 `.claude/` 不入库），
 `setup.sh` 负责把它换成 `~/.claude/skills/` 与 `~/.codex/skills/`。
 
 写新的站点 skill 前请阅读 [`references/site-exploration-and-playbook-spec.md`](references/site-exploration-and-playbook-spec.md)。
