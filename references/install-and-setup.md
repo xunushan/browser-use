@@ -58,8 +58,17 @@ ln -s <本仓库路径> ~/.claude/skills/chrome-agent
 
 ### 3. 加载扩展 —— 唯一需要用户动手的一步
 
-Chrome 不提供静默安装路径：扩展必须由用户在 `chrome://extensions` 上亲自加载，
-机器装不了。用户在场时，可以替他把页面和文件夹打开：
+Chrome 不提供静默安装路径：扩展必须由用户在 `chrome://extensions` 上亲自加载。
+`--load-extension` 这个命令行开关已在 Chrome 137 从正式版构建中移除，官方给出的两个
+替代（CDP `Extensions.loadUnpacked`、WebDriver BiDi `webExtension.install`）都要求另起
+一个受调试驱动的 Chrome 实例，拿不到用户这个已登录的 Chrome，对本项目没有用。
+
+来源：Chrome for Developers《What's happening in Chrome Extensions, June 2025》
+（2025-06-06，`--load-extension` 被滥用为由宣布移除）；
+chromium-extensions 邮件组 PSA "Removing `--load-extension` in Chrome 137"（2025-03-18）；
+Cypress issue #31690（2025-05-12，列出上述两个替代方案）。
+
+用户在场时，可以替他把页面和文件夹打开：
 
 ```bash
 open -a "Google Chrome" "chrome://extensions"
