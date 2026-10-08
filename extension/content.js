@@ -36,6 +36,47 @@
     /token/i,
   ];
 
+  // Page text can hold half a character. Cutting a string by UTF-16 units splits
+  // an emoji down the middle — `"🎶".substring(0, 1)` is one lone surrogate — and
+  // a page can hand one over already broken. Either way it leaves the extension
+  // as the JSON escape `"\ud83c"`, which Python accepts on the way in but cannot
+  // encode back to UTF-8 on the way out. That used to kill the native host
+  // process mid-session and reach the caller as a bogus "Extension
+  // disconnected", so text is repaired and cut by code point instead.
+  const UNPAIRED_SURROGATE =
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+  /**
+   * Replace unpaired surrogates with U+FFFD, at any depth.
+   */
+  function repairSurrogates(value) {
+    if (typeof value === 'string') {
+      // A string with nothing to repair comes back as itself.
+      return value.replace(UNPAIRED_SURROGATE, '�');
+    }
+    if (Array.isArray(value)) {
+      return value.map(repairSurrogates);
+    }
+    if (value && typeof value === 'object') {
+      const repaired = {};
+      for (const [key, item] of Object.entries(value)) {
+        repaired[key] = repairSurrogates(item);
+      }
+      return repaired;
+    }
+    return value;
+  }
+
+  /**
+   * Page text, cut to `limit` characters with no character cut in half.
+   */
+  function textSlice(value, limit) {
+    const text = repairSurrogates(String(value ?? '')).trim();
+    if (text.length <= limit) return text;
+    // Spread into code points, so the cut lands between characters.
+    return Array.from(text).slice(0, limit).join('');
+  }
+
   /**
    * Generate or get element reference
    */
@@ -196,7 +237,7 @@
     // Get text content (limited)
     let textContent = null;
     if (element.textContent) {
-      textContent = element.textContent.trim().substring(0, 200);
+      textContent = textSlice(element.textContent, 200);
     }
 
     return {
@@ -819,7 +860,7 @@
       if (href && !href.startsWith('javascript:')) {
         links.push({
           href: href,
-          text: text.substring(0, 500),
+          text: textSlice(text, 500),
           title: a.getAttribute('title') || null,
         });
       }
@@ -831,7 +872,7 @@
     document.querySelectorAll('h1, h2, h3, h4').forEach(h => {
       headings.push({
         tag: h.tagName.toLowerCase(),
-        text: (h.textContent || '').trim().substring(0, 1000),
+        text: textSlice(h.textContent, 1000),
       });
     });
 
@@ -839,7 +880,7 @@
     document.querySelectorAll('p, div[role="article"], article, section').forEach(el => {
       const text = (el.textContent || '').trim();
       if (text.length > 20 && text.length < 5000) {
-        paragraphs.push(text.substring(0, 2000));
+        paragraphs.push(textSlice(text, 2000));
       }
     });
 
@@ -858,15 +899,18 @@
     const element = getElementByRef(ref);
     if (!element) return { success: false, error: 'Text element not found' };
     const limit = Math.min(Math.max(Number(maxChars) || 20000, 1), 200000);
-    const fullText = (element.innerText || element.textContent || '').trim();
+    // Counted in characters, not UTF-16 units, so `length`, `returnedLength`
+    // and `truncated` agree with the `limit` the caller asked for.
+    const characters = Array.from(textSlice(element.innerText || element.textContent, Infinity));
+    const returned = characters.slice(0, limit);
     return {
       success: true,
       ref,
       documentId: DOCUMENT_ID,
-      text: fullText.slice(0, limit),
-      length: fullText.length,
-      returnedLength: Math.min(fullText.length, limit),
-      truncated: fullText.length > limit,
+      text: returned.join(''),
+      length: characters.length,
+      returnedLength: returned.length,
+      truncated: returned.length < characters.length,
     };
   }
 
@@ -952,11 +996,18 @@
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log("Content script received:", request);
 
+    // Everything this script says goes out through here, so this is where the
+    // one rule is enforced: no unpaired surrogate leaves the extension, whatever
+    // a page put in the DOM or an attribute. The text helpers above keep good
+    // text whole; this keeps anything they did not touch from breaking the
+    // channel downstream.
+    const reply = result => sendResponse(repairSurrogates(result));
+
     const { action, params } = request;
 
     switch (action) {
       case 'ping':
-        sendResponse({ pong: true, documentId: DOCUMENT_ID });
+        reply({ pong: true, documentId: DOCUMENT_ID });
         break;
 
       case 'snapshot':
@@ -965,97 +1016,97 @@
           null,
           params?.limit ?? SNAPSHOT_DEFAULT_LIMIT
         );
-        sendResponse(snapshot);
+        reply(snapshot);
         break;
 
       case 'click':
         const clickResult = performClick(params?.ref);
-        sendResponse(clickResult);
+        reply(clickResult);
         break;
 
       case 'fill':
         const fillResult = performFill(params?.ref, params?.value);
-        sendResponse(fillResult);
+        reply(fillResult);
         break;
 
       case 'scroll':
         const scrollResult = performScroll(params?.dx, params?.dy, params?.ref);
-        sendResponse(scrollResult);
+        reply(scrollResult);
         break;
 
       case 'images':
         const imageRoot = params?.ref ? getElementByRef(params.ref) : document;
         if (!imageRoot) {
-          sendResponse({ success: false, error: 'Image scope element not found' });
+          reply({ success: false, error: 'Image scope element not found' });
           break;
         }
         if (params?.load) {
           loadAndCollectImages(params?.maxScrolls, params?.settleMs, params?.ref)
-            .then(result => sendResponse(result));
+            .then(result => reply(result));
         } else {
           const images = collectImages(imageRoot);
-          sendResponse({ success: true, images, count: images.length });
+          reply({ success: true, images, count: images.length });
         }
         break;
 
       case 'screenshot':
         captureScreenshot(params?.scope || 'viewport', params?.ref, params?.rect)
-          .then(result => sendResponse(result));
+          .then(result => reply(result));
         break;
 
       case 'checkSensitivity':
-        sendResponse(checkPageSensitivity());
+        reply(checkPageSensitivity());
         break;
       case 'keypress':
         const keyResult = performKeypress(params?.ref, params?.keys);
-        sendResponse(keyResult);
+        reply(keyResult);
         break;
 
       case 'wait':
         // Wait for element or condition
         if (params?.selector) {
           waitForElement(params.selector, params?.timeout || 5000)
-            .then(result => sendResponse(result));
+            .then(result => reply(result));
         } else if (params?.url) {
           waitForUrlChange(params.url, params?.timeout || 10000)
-            .then(result => sendResponse(result));
+            .then(result => reply(result));
         } else if (params?.mutation) {
           waitForMutation(params?.selector, params?.timeout || 5000)
-            .then(result => sendResponse(result));
+            .then(result => reply(result));
         } else {
-          sendResponse({ error: 'No wait condition specified' });
+          reply({ error: 'No wait condition specified' });
         }
         break;
 
       case 'pageState':
-        sendResponse(getPageState());
+        reply(getPageState());
         break;
 
       case 'validate':
         const validationResult = validateElement(params?.ref);
-        sendResponse(validationResult);
+        reply(validationResult);
         break;
 
       case 'extract':
-        sendResponse(extractPageData());
+        reply(extractPageData());
         break;
 
       case 'text':
-        sendResponse(extractElementText(params?.ref, params?.maxChars));
+        reply(extractElementText(params?.ref, params?.maxChars));
         break;
 
       case 'media':
         const mediaRoot = params?.ref ? getElementByRef(params.ref) : document;
         if (!mediaRoot) {
-          sendResponse({ success: false, error: 'Media scope element not found' });
+          reply({ success: false, error: 'Media scope element not found' });
           break;
         }
         const media = collectMedia(mediaRoot);
-        sendResponse({ success: true, media, count: media.length });
+        reply({ success: true, media, count: media.length });
         break;
 
       default:
-        sendResponse({ error: `Unknown action: ${action}` });
+        reply({ error: `Unknown action: ${action}` });
     }
 
     // Return true to indicate async response

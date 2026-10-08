@@ -52,6 +52,7 @@ chrome-agent tabs activate <tab-id> --json
 | 重启过 daemon（`stop` 再 `start`）之后，命令一直报 `No extension connected` | 旧的 native host 进程还活着：扩展那边 `nativePort` 非空，以为连接还在，keep-alive 就不会重连，而它转发到的 daemon 已经换了一个。在 `chrome://extensions` 上重载扩展即可恢复（或杀掉那个 `chrome_agent.native_host` 进程，扩展收到 `onDisconnect` 后会自己连回来） |
 | 扩展刚重载过，早先打开的页面里命令不生效 | 重载换掉的是扩展自己，页面里已注入的还是旧代码：刷新那个页面 |
 | 转发报错里提到扩展端口/消息通道关闭，例如 `... moved into back/forward cache, so the message channel is closed.` | 目标标签页在后台被冻结了：`tabs activate` 后重试；这是一次传输失败，不是页面失败，重试同样的操作即可 |
+| `Failed to forward to extension: Extension disconnected` | 扩展与 daemon 之间的桥断了，一般是 native host 进程退出了：原因写在 `~/Library/Application Support/ChromeAgent/logs/native-host.log` 最后一段。通道随后会自己建回来（Chrome 重新拉起 host），重试即可。**但同一条命令每次都报这个**就不是通道问题，是那条消息本身有问题——日志里有确切异常，照它查 |
 
 `chrome-agent status` 看守护进程，`chrome-agent extension status --json` 看扩展
 （`connected` / `reloadNeeded`），比逐个试命令快。
@@ -67,6 +68,8 @@ chrome-agent tabs activate <tab-id> --json
 ## 长文本不完整
 
 `page text` 的返回里 `truncated` 为真就说明被 `--max-chars` 截断了（上限 200000）。另外 `page snapshot` 里元素的文本上限是 200 字符——那是定位用的，**不是正文**。
+
+`length`、`returnedLength`、`truncated` 都按**字符**计，一个 emoji 算一个，所以它们能和 `--max-chars` 直接对账。截断按字符边界切，不会把一个字符切成两半。
 
 - 优先取更精确的容器（正文块本身，而不是包着导航/评论/推荐的外层容器）。
 - 调到上限仍不够，就分段读（按子块 ref 分别读），并如实报告内容被切分过。

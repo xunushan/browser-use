@@ -86,6 +86,53 @@ class TestContentScript:
         assert "element" in content
 
 
+class TestTextNeverLeavesHalfACut:
+    """Page text must not leave the extension with half a character in it.
+
+    A string cut by UTF-16 units splits an emoji down the middle. The half that
+    comes out is a lone surrogate, which JSON carries as an escape and UTF-8
+    cannot encode — re-serializing it in the native host used to kill the
+    process and break the whole channel.
+    """
+
+    def content(self) -> str:
+        return (Path(__file__).parent.parent / "extension" / "content.js").read_text()
+
+    def test_cuts_are_by_code_point_not_by_utf16_unit(self):
+        content = self.content()
+
+        assert "const UNPAIRED_SURROGATE" in content
+        assert "function textSlice(value, limit)" in content
+        assert "function repairSurrogates(value)" in content
+        for cut in ("substring(0, 200)", "substring(0, 500)", "substring(0, 1000)",
+                    "substring(0, 2000)", "fullText.slice(0, limit)"):
+            assert cut not in content
+
+        assert "textSlice(element.textContent, 200)" in content
+        assert "textSlice(text, 500)" in content
+        assert "textSlice(h.textContent, 1000)" in content
+        assert "textSlice(text, 2000)" in content
+
+    def test_page_text_counts_characters_not_utf16_units(self):
+        """`length` has to agree with the `--max-chars` the caller asked for."""
+        content = self.content()
+
+        assert (
+            "Array.from(textSlice(element.innerText || element.textContent, Infinity))"
+            in content
+        )
+        assert "length: characters.length," in content
+        assert "truncated: returned.length < characters.length," in content
+
+    def test_every_response_is_repaired_on_the_way_out(self):
+        content = self.content()
+
+        assert "const reply = result => sendResponse(repairSurrogates(result));" in content
+        # sendResponse is reachable only through the wrapper, so nothing can
+        # bypass the repair by calling it directly.
+        assert content.count("sendResponse(") == 1
+
+
 class TestBackgroundScript:
     """Test Background Script functionality."""
 
